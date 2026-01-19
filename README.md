@@ -1,3 +1,5 @@
+<img width="986" height="743" alt="2026-01-19_042504" src="https://github.com/user-attachments/assets/54bc8ba6-3dda-481d-bba3-fcdd31aa8500" />
+
 # CleanupTemp Pro 🧹
 
 Программа для очистки временных файлов Windows с графическим интерфейсом.
