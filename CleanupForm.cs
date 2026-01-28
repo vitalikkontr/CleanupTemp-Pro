@@ -21,7 +21,7 @@ namespace CleanupTempPro
         private CancellationTokenSource cts;
         private Stopwatch stopwatch;
         private System.Windows.Forms.Timer updateTimer;
-        
+
         private Dictionary<string, ProgressBar> progressBars;
         private Dictionary<string, CheckBox> cleanupOptions;
         private ListView listViewHistory;
@@ -152,15 +152,16 @@ namespace CleanupTempPro
 
             btnStart.Click += BtnStart_Click;
             btnStop.Click += BtnStop_Click;
-            btnOpenTemp.Click += delegate { 
-                try 
-                { 
-                    Process.Start("explorer.exe", Path.GetTempPath()); 
-                } 
-                catch (Exception ex) 
-                { 
-                    MessageBox.Show("Ошибка открытия папки temp: " + ex.Message, "Ошибка", 
-                        MessageBoxButtons.OK, MessageBoxIcon.Error); 
+            btnOpenTemp.Click += delegate
+            {
+                try
+                {
+                    Process.Start("explorer.exe", Path.GetTempPath());
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Ошибка открытия папки temp: " + ex.Message, "Ошибка",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             };
             btnRefresh.Click += BtnRefresh_Click;
@@ -191,7 +192,7 @@ namespace CleanupTempPro
         private void CreateOptionsTab(TabPage tab)
         {
             int yPos = 20;
-            
+
             GroupBox grpTemp = CreateGroupBox("Временные файлы Windows", yPos);
             cleanupOptions["WinTemp"] = CreateOptionCheckBox("Windows Temp", 20, 25, false);
             cleanupOptions["Prefetch"] = CreateOptionCheckBox("Prefetch", 20, 50, false);
@@ -244,16 +245,16 @@ namespace CleanupTempPro
             Button btnSelectAll = CreateButton("Выбрать всё", 600, 20, 150, 30, Color.FromArgb(0, 150, 255));
             Button btnDeselectAll = CreateButton("Снять всё", 600, 60, 150, 30, Color.FromArgb(150, 50, 50));
             Button btnRecommended = CreateButton("Рекомендуемые", 600, 100, 150, 30, Color.FromArgb(100, 150, 100));
-            
-            btnSelectAll.Click += delegate 
-            { 
-                foreach (var cb in cleanupOptions.Values) 
-                    cb.Checked = true; 
+
+            btnSelectAll.Click += delegate
+            {
+                foreach (var cb in cleanupOptions.Values)
+                    cb.Checked = true;
             };
-            btnDeselectAll.Click += delegate 
-            { 
-                foreach (var cb in cleanupOptions.Values) 
-                    cb.Checked = false; 
+            btnDeselectAll.Click += delegate
+            {
+                foreach (var cb in cleanupOptions.Values)
+                    cb.Checked = false;
             };
             btnRecommended.Click += delegate
             {
@@ -265,7 +266,7 @@ namespace CleanupTempPro
                 cleanupOptions["Edge"].Checked = true;
                 cleanupOptions["DNS"].Checked = true;
             };
-            
+
             tab.Controls.Add(btnSelectAll);
             tab.Controls.Add(btnDeselectAll);
             tab.Controls.Add(btnRecommended);
@@ -274,7 +275,7 @@ namespace CleanupTempPro
         private void CreateProgressTab(TabPage tab)
         {
             int yPos = 20;
-            
+
             Label lblInfo = new Label();
             lblInfo.Text = "Отслеживание прогресса в реальном времени";
             lblInfo.Font = new Font("Segoe UI", 11, FontStyle.Bold);
@@ -285,8 +286,8 @@ namespace CleanupTempPro
             tab.Controls.Add(lblInfo);
             yPos += 40;
 
-            string[] categories = new string[] { 
-                "Временные файлы Windows", "Браузеры", "Мессенджеры", "Системные утилиты" 
+            string[] categories = new string[] {
+                "Временные файлы Windows", "Браузеры", "Мессенджеры", "Системные утилиты"
             };
 
             foreach (var category in categories)
@@ -400,10 +401,10 @@ namespace CleanupTempPro
 
             Button btnClearHistory = CreateButton("Очистить историю", 20, 540, 150, 30, Color.FromArgb(150, 50, 50));
             Button btnExportHistory = CreateButton("Экспорт истории", 180, 540, 150, 30, Color.FromArgb(100, 100, 200));
-            
+
             btnClearHistory.Click += delegate { listViewHistory.Items.Clear(); };
             btnExportHistory.Click += BtnExportHistory_Click;
-            
+
             tab.Controls.Add(btnClearHistory);
             tab.Controls.Add(btnExportHistory);
         }
@@ -545,9 +546,9 @@ namespace CleanupTempPro
 
         private void LoadHistory()
         {
-            string[] item = new string[] { 
-                DateTime.Now.AddDays(-1).ToString("yyyy-MM-dd HH:mm"), 
-                "230 МБ", "1234", "87", "12.3с", "Успешно" 
+            string[] item = new string[] {
+                DateTime.Now.AddDays(-1).ToString("yyyy-MM-dd HH:mm"),
+                "230 МБ", "1234", "87", "12.3с", "Успешно"
             };
             listViewHistory.Items.Add(new ListViewItem(item));
         }
@@ -558,8 +559,8 @@ namespace CleanupTempPro
                 Cleanup.GetFormattedFreedSpace(),
                 Cleanup.GetTotalFiles(),
                 Cleanup.GetTotalFolders());
-            
-            MessageBox.Show("Статистика обновлена!", "Информация", 
+
+            MessageBox.Show("Статистика обновлена!", "Информация",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
@@ -575,7 +576,7 @@ namespace CleanupTempPro
                 {
                     System.Text.StringBuilder sb = new System.Text.StringBuilder();
                     sb.AppendLine("Дата и время,Освобождено,Файлы,Папки,Время,Статус");
-                    
+
                     foreach (ListViewItem item in listViewHistory.Items)
                     {
                         string line = string.Format("{0},{1},{2},{3},{4},{5}",
@@ -587,14 +588,14 @@ namespace CleanupTempPro
                             item.SubItems[5].Text);
                         sb.AppendLine(line);
                     }
-                    
+
                     File.WriteAllText(sfd.FileName, sb.ToString());
-                    MessageBox.Show(string.Format("История экспортирована в:\n{0}", sfd.FileName), 
+                    MessageBox.Show(string.Format("История экспортирована в:\n{0}", sfd.FileName),
                         "Экспорт завершён", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show(string.Format("Ошибка экспорта: {0}", ex.Message), 
+                    MessageBox.Show(string.Format("Ошибка экспорта: {0}", ex.Message),
                         "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
@@ -614,7 +615,7 @@ namespace CleanupTempPro
 
             if (!anySelected)
             {
-                MessageBox.Show("Пожалуйста, выберите хотя бы один пункт для очистки!", 
+                MessageBox.Show("Пожалуйста, выберите хотя бы один пункт для очистки!",
                     "Ничего не выбрано", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -625,7 +626,7 @@ namespace CleanupTempPro
             btnRefresh.Enabled = false;
             txtLog.Clear();
             Cleanup.ResetStats();
-            
+
             foreach (var pb in progressBars.Values)
                 pb.Value = 0;
             pbMain.Value = 0;
@@ -643,7 +644,7 @@ namespace CleanupTempPro
 
         private void BtnStop_Click(object sender, EventArgs e)
         {
-            if (cts != null) 
+            if (cts != null)
                 cts.Cancel();
             Log("\nОчистка отменена пользователем!");
             lblStatus.Text = "Отменено";
@@ -682,26 +683,26 @@ namespace CleanupTempPro
         }
 
         private void BtnExport_Click(object sender, EventArgs e)
-{
-    SaveFileDialog sfd = new SaveFileDialog();
-    sfd.Filter = "Текстовые файлы (*.txt)|*.txt|Все файлы (*.*)|*.*";
-    sfd.FileName = string.Format("Лог_Очистки_{0:yyyyMMdd_HHmmss}.txt", DateTime.Now);
+        {
+            SaveFileDialog sfd = new SaveFileDialog();
+            sfd.Filter = "Текстовые файлы (*.txt)|*.txt|Все файлы (*.*)|*.*";
+            sfd.FileName = string.Format("Лог_Очистки_{0:yyyyMMdd_HHmmss}.txt", DateTime.Now);
 
-    if (sfd.ShowDialog() == DialogResult.OK)
-    {
-        try
-        {
-            File.WriteAllText(sfd.FileName, txtLog.Text);
-            MessageBox.Show(string.Format("Лог экспортирован в:\n{0}", sfd.FileName), 
-                "Экспорт завершён", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            if (sfd.ShowDialog() == DialogResult.OK)
+            {
+                try
+                {
+                    File.WriteAllText(sfd.FileName, txtLog.Text);
+                    MessageBox.Show(string.Format("Лог экспортирован в:\n{0}", sfd.FileName),
+                        "Экспорт завершён", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(string.Format("Ошибка экспорта: {0}", ex.Message),
+                        "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
         }
-        catch (Exception ex)
-        {
-            MessageBox.Show(string.Format("Ошибка экспорта: {0}", ex.Message), 
-                "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
-    }
-}
         private async void RunCleanup(CancellationToken token)
         {
             try
@@ -724,13 +725,13 @@ namespace CleanupTempPro
                     UpdateProgressBarMain(progress);
 
                     Log($"\n[{currentStep}/{totalSteps}] Обработка: {option}");
-                    
+
                     string category = GetCategory(option);
                     for (int i = 0; i <= 100; i += 10)
                     {
                         if (token.IsCancellationRequested)
                             break;
-                        
+
                         UpdateProgressBar(category, i);
                         await Task.Delay(100, token);
                     }
@@ -742,13 +743,14 @@ namespace CleanupTempPro
                 {
                     Log("\n=== Очистка успешно завершена ===");
                     UpdateProgressBarMain(100);
-                    
-                    this.Invoke(new Action(() => {
+
+                    this.Invoke(new Action(() =>
+                    {
                         lblStatus.Text = "Очистка завершена!";
                         lblStatus.ForeColor = Color.FromArgb(0, 255, 127);
-                        
+
                         AddToHistory("Успешно");
-                        
+
                         if (chkPlaySound.Checked)
                             System.Media.SystemSounds.Asterisk.Play();
                     }));
@@ -761,7 +763,8 @@ namespace CleanupTempPro
             catch (Exception ex)
             {
                 Log($"\nОШИБКА: {ex.Message}");
-                this.Invoke(new Action(() => {
+                this.Invoke(new Action(() =>
+                {
                     lblStatus.Text = "Произошла ошибка";
                     lblStatus.ForeColor = Color.Red;
                     AddToHistory("Ошибка");
@@ -777,10 +780,10 @@ namespace CleanupTempPro
         {
             if (option == "WinTemp" || option == "Prefetch" || option == "RecycleBin")
                 return "Временные файлы Windows";
-            if (option == "Opera" || option == "Chrome" || option == "Edge" || 
+            if (option == "Opera" || option == "Chrome" || option == "Edge" ||
                 option == "Firefox" || option == "Brave" || option == "Yandex")
                 return "Браузеры";
-            if (option == "Telegram" || option == "Discord" || option == "Viber" || 
+            if (option == "Telegram" || option == "Discord" || option == "Viber" ||
                 option == "Zoom" || option == "Spotify" || option == "VSCode")
                 return "Мессенджеры";
             return "Системные утилиты";
@@ -837,10 +840,10 @@ namespace CleanupTempPro
 
         private void FinishCleanup()
         {
-            if (stopwatch != null) 
+            if (stopwatch != null)
                 stopwatch.Stop();
             updateTimer.Stop();
-            
+
             if (this.InvokeRequired)
             {
                 this.Invoke(new Action(FinishCleanup));
@@ -851,13 +854,18 @@ namespace CleanupTempPro
                 btnStop.Enabled = false;
                 btnOpenTemp.Enabled = true;
                 btnRefresh.Enabled = true;
-                
+
                 if (cts != null)
                 {
                     cts.Dispose();
                     cts = null;
                 }
             }
+        }
+
+        private void InitializeComponent()
+        {
+
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
@@ -875,7 +883,7 @@ namespace CleanupTempPro
                     e.Cancel = true;
                     return;
                 }
-                
+
                 cts.Cancel();
             }
 

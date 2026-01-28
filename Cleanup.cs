@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Diagnostics;
@@ -85,7 +86,7 @@ namespace CleanupTempPro
                         await CleanAppCache("Discord", autoClose, token);
                         break;
                     case "Viber":
-                        await CleanAppCache("Viber", autoClose, token);
+                        await CleanViberCache(autoClose, token);
                         break;
                     case "Zoom":
                         await CleanAppCache("Zoom", autoClose, token);
@@ -153,9 +154,9 @@ namespace CleanupTempPro
         private static async Task CleanBrowserCache(string browser, bool autoClose, CancellationToken token)
         {
             Log($"Очистка кэша {browser}...");
-            
+
             string cachePath = GetBrowserCachePath(browser);
-            
+
             if (autoClose)
             {
                 await CloseProcessByName(GetBrowserProcessName(browser), token);
@@ -168,16 +169,16 @@ namespace CleanupTempPro
             }
             else
             {
-                Log($"  ⚠ Кэш {browser} не найден");
+                Log($"  ⚠ Кэш {browser} не найден по пути: {cachePath}");
             }
         }
 
         private static async Task CleanAppCache(string app, bool autoClose, CancellationToken token)
         {
             Log($"Очистка кэша {app}...");
-            
+
             string cachePath = GetAppCachePath(app);
-            
+
             if (autoClose)
             {
                 await CloseProcessByName(GetAppProcessName(app), token);
@@ -191,6 +192,85 @@ namespace CleanupTempPro
             else
             {
                 Log($"  ⚠ Кэш {app} не найден");
+            }
+        }
+
+        private static async Task CleanViberCache(bool autoClose, CancellationToken token)
+        {
+            Log("Очистка кэша Viber...");
+
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            string viberBase = Path.Combine(appData, @"ViberPC");
+
+            if (autoClose)
+            {
+                await CloseProcessByName("Viber", token);
+            }
+
+            if (!Directory.Exists(viberBase))
+            {
+                Log("  ⚠ Viber не найден");
+                return;
+            }
+
+            try
+            {
+                // Находим папку с номером пользователя (например, 380969113233)
+                var userFolders = Directory.GetDirectories(viberBase)
+                    .Where(d => Path.GetFileName(d).All(char.IsDigit))
+                    .ToList();
+
+                if (userFolders.Count == 0)
+                {
+                    Log("  ⚠ Папка пользователя Viber не найдена");
+                    return;
+                }
+
+                string userFolder = userFolders[0];
+                Log($"  → Найдена папка пользователя: {Path.GetFileName(userFolder)}");
+
+                // Список безопасных для удаления папок (только кэш и временные файлы!)
+                string[] cacheFolders = new string[]
+                {
+                    "Temporary",
+                    "Thumbnails",
+                    "QmlUriCache",
+                    "QmlWebCache",
+                    "Avatars",
+                    "Backgrounds",
+                    "Icons"
+                };
+
+                int cleanedFolders = 0;
+                long startSize = totalFreedSpace;
+
+                foreach (string folder in cacheFolders)
+                {
+                    if (token.IsCancellationRequested)
+                        break;
+
+                    string folderPath = Path.Combine(userFolder, folder);
+                    if (Directory.Exists(folderPath))
+                    {
+                        Log($"  → Очистка {folder}...");
+                        await CleanDirectory(folderPath, token);
+                        cleanedFolders++;
+                    }
+                }
+
+                long freedSpace = totalFreedSpace - startSize;
+                double mb = freedSpace / (1024.0 * 1024.0);
+
+                if (cleanedFolders > 0)
+                    Log($"  ✓ Кэш Viber очищен ({cleanedFolders} папок, {mb:F1} МБ)");
+                else
+                    Log("  ⚠ Папки кэша Viber не найдены или уже пусты");
+
+                Log("  ℹ Важно: Данные аккаунта и сообщения НЕ ТРОНУТЫ!");
+            }
+            catch (Exception ex)
+            {
+                Log($"  ⚠ Ошибка очистки Viber: {ex.Message}");
             }
         }
 
@@ -248,7 +328,7 @@ namespace CleanupTempPro
                 try
                 {
                     DirectoryInfo di = new DirectoryInfo(path);
-                    
+
                     foreach (FileInfo file in di.GetFiles())
                     {
                         if (token.IsCancellationRequested)
@@ -309,11 +389,36 @@ namespace CleanupTempPro
         private static string GetBrowserCachePath(string browser)
         {
             string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            
+
             switch (browser)
             {
                 case "Opera":
-                    return Path.Combine(appData, @"Opera Software\Opera Stable\Cache");
+                    // Поддержка всех вариантов установки Opera
+                    string operaBase = Path.Combine(appData, @"Opera Software");
+
+                    // 1. Проверяем Opera Stable (стандартная установка)
+                    string operaStableCache = Path.Combine(operaBase, @"Opera Stable\Default\Cache");
+                    if (Directory.Exists(operaStableCache))
+                        return operaStableCache;
+
+                    // 2. Проверяем Opera One
+                    string operaOneCache = Path.Combine(operaBase, @"Opera One\Default\Cache");
+                    if (Directory.Exists(operaOneCache))
+                        return operaOneCache;
+
+                    // 3. Проверяем Opera GX
+                    string operaGXCache = Path.Combine(operaBase, @"Opera GX Stable\Default\Cache");
+                    if (Directory.Exists(operaGXCache))
+                        return operaGXCache;
+
+                    // 4. Проверяем портативную установку
+                    string operaPortableCache = Path.Combine(appData, @"..\Programs\Opera\profile\Cache");
+                    if (Directory.Exists(operaPortableCache))
+                        return Path.GetFullPath(operaPortableCache);
+
+                    // По умолчанию возвращаем стандартный путь Opera Stable
+                    return operaStableCache;
+
                 case "Chrome":
                     return Path.Combine(appData, @"Google\Chrome\User Data\Default\Cache");
                 case "Edge":
@@ -333,15 +438,13 @@ namespace CleanupTempPro
         {
             string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
             string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            
+
             switch (app)
             {
                 case "Telegram":
                     return Path.Combine(appData, @"Telegram Desktop\tdata\user_data");
                 case "Discord":
                     return Path.Combine(appData, @"discord\Cache");
-                case "Viber":
-                    return Path.Combine(appData, @"ViberPC");
                 case "Zoom":
                     return Path.Combine(appData, @"Zoom\logs");
                 case "Spotify":
