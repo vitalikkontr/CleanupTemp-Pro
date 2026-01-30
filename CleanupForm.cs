@@ -7,12 +7,13 @@ using System.Diagnostics;
 using System.Collections.Generic;
 using System.Linq;
 using System.IO;
+using CleanupTemp_Pro;
 
 namespace CleanupTempPro
 {
     public class CleanupForm : Form
     {
-        private Button btnStart, btnStop, btnExit, btnOpenTemp, btnExport, btnRefresh;
+        private Button btnStart, btnStop, btnExit, btnOpenTemp, btnExport, btnRefresh, btnTheme;
         private TextBox txtLog;
         private Label lblStats, lblStatus, lblTitle, lblVersion;
         private ProgressBar pbMain;
@@ -21,6 +22,7 @@ namespace CleanupTempPro
         private CancellationTokenSource cts;
         private Stopwatch stopwatch;
         private System.Windows.Forms.Timer updateTimer;
+        private ToolTip toolTip; // ← ДОБАВЛЕНО
 
         private Dictionary<string, ProgressBar> progressBars;
         private Dictionary<string, CheckBox> cleanupOptions;
@@ -29,14 +31,12 @@ namespace CleanupTempPro
 
         public CleanupForm()
         {
-            this.Text = "CleanupTemp Pro - Профессиональная версия";
+            this.Text = "CleanupTemp - Профессиональная версия";
             this.Size = new Size(1000, 750);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = true;
-            this.BackColor = Color.FromArgb(45, 45, 48);
-            this.ForeColor = Color.White;
 
             progressBars = new Dictionary<string, ProgressBar>();
             cleanupOptions = new Dictionary<string, CheckBox>();
@@ -45,6 +45,283 @@ namespace CleanupTempPro
             SetupCallbacks();
             SetupTimer();
             LoadHistory();
+            InitializeToolTips(); // ← ДОБАВЛЕНО
+
+            // Применяем тему
+            ThemeManager.ApplyTheme(this);
+        }
+
+        private void InitializeToolTips()
+        {
+            // Создаём ToolTip
+            toolTip = new ToolTip
+            {
+                AutoPopDelay = 8000,  // 8 секунд показывать
+                InitialDelay = 400,   // 0.4 сек задержка
+                ReshowDelay = 150,    // 0.15 сек между подсказками
+                ShowAlways = true,
+                IsBalloon = false
+            };
+
+            // ════════════════════════════════════════════════════════════════
+            // КНОПКИ УПРАВЛЕНИЯ
+            // ════════════════════════════════════════════════════════════════
+
+            toolTip.SetToolTip(btnStart,
+                "Начать процесс очистки выбранных папок и файлов");
+
+            toolTip.SetToolTip(btnStop,
+                "Остановить текущую операцию очистки");
+
+            toolTip.SetToolTip(btnOpenTemp,
+                "Открыть папку TEMP в проводнике");
+
+            toolTip.SetToolTip(btnRefresh,
+                "Обновить информацию о размере папок и статистику");
+
+            toolTip.SetToolTip(btnExport,
+                "Экспортировать лог очистки в текстовый файл");
+
+            toolTip.SetToolTip(btnExit,
+                "Выйти из программы");
+
+            toolTip.SetToolTip(btnTheme,
+                "Переключить между светлой и тёмной темой");
+
+            // ════════════════════════════════════════════════════════════════
+            // ЧЕКБОКСЫ НАСТРОЕК
+            // ════════════════════════════════════════════════════════════════
+
+            toolTip.SetToolTip(chkAutoClose,
+                "Автоматически закрывать работающие приложения перед очисткой");
+
+            toolTip.SetToolTip(chkPlaySound,
+                "Воспроизвести звуковой сигнал при завершении очистки");
+
+            toolTip.SetToolTip(chkShowDetails,
+                "Показывать подробную информацию о процессе очистки");
+
+            // ════════════════════════════════════════════════════════════════
+            // ЧЕКБОКСЫ ОЧИСТКИ - ВРЕМЕННЫЕ ФАЙЛЫ WINDOWS
+            // ════════════════════════════════════════════════════════════════
+
+            toolTip.SetToolTip(cleanupOptions["WinTemp"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 C:\\Windows\\Temp\n" +
+                "Временные файлы системы Windows. Можно безопасно удалять.");
+
+            toolTip.SetToolTip(cleanupOptions["Prefetch"],
+                "⚠️ ВНИМАНИЕ\n" +
+                "📁 C:\\Windows\\Prefetch\n" +
+                "Файлы для ускорения запуска программ.\n" +
+                "Windows пересоздаст их автоматически.");
+
+            toolTip.SetToolTip(cleanupOptions["RecycleBin"],
+                "⚠️ ВНИМАНИЕ\n" +
+                "📁 Корзина\n" +
+                "Файлы будут удалены НАВСЕГДА без возможности восстановления!");
+
+            toolTip.SetToolTip(cleanupOptions["RecentItems"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Недавние элементы\n" +
+                "История недавно открытых файлов. Безопасно очищать.");
+
+            toolTip.SetToolTip(cleanupOptions["TempSetup"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Временные установочные файлы\n" +
+                "Оставшиеся файлы после установки программ.");
+
+            // ════════════════════════════════════════════════════════════════
+            // ЧЕКБОКСЫ ОЧИСТКИ - БРАУЗЕРЫ
+            // ════════════════════════════════════════════════════════════════
+
+            toolTip.SetToolTip(cleanupOptions["Opera"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Кэш Opera / Opera GX\n" +
+                "Временные файлы браузера. Освободит место.");
+
+            toolTip.SetToolTip(cleanupOptions["Chrome"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Кэш Google Chrome\n" +
+                "Временные интернет-файлы, история загрузок.");
+
+            toolTip.SetToolTip(cleanupOptions["Edge"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Кэш Microsoft Edge\n" +
+                "Временные файлы браузера Edge.");
+
+            toolTip.SetToolTip(cleanupOptions["Firefox"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Кэш Mozilla Firefox\n" +
+                "Временные интернет-файлы Firefox.");
+
+            toolTip.SetToolTip(cleanupOptions["Brave"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Кэш Brave Browser\n" +
+                "Временные файлы Brave браузера.");
+
+            toolTip.SetToolTip(cleanupOptions["Yandex"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Кэш Яндекс Браузер\n" +
+                "Временные файлы Яндекс браузера.");
+
+            toolTip.SetToolTip(cleanupOptions["Vivaldi"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Кэш Vivaldi\n" +
+                "Временные файлы Vivaldi браузера.");
+
+            toolTip.SetToolTip(cleanupOptions["Tor"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Кэш Tor Browser\n" +
+                "Временные файлы Tor браузера.");
+
+            // ════════════════════════════════════════════════════════════════
+            // ЧЕКБОКСЫ ОЧИСТКИ - МЕССЕНДЖЕРЫ
+            // ════════════════════════════════════════════════════════════════
+
+            toolTip.SetToolTip(cleanupOptions["Telegram"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Кэш Telegram\n" +
+                "Временные файлы, загруженные медиа. Сообщения сохранятся.");
+
+            toolTip.SetToolTip(cleanupOptions["Discord"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Кэш Discord\n" +
+                "Временные файлы Discord. Данные останутся на сервере.");
+
+            toolTip.SetToolTip(cleanupOptions["Viber"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Кэш Viber\n" +
+                "Временные файлы Viber.");
+
+            toolTip.SetToolTip(cleanupOptions["Zoom"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Кэш Zoom\n" +
+                "Временные файлы конференций Zoom.");
+
+            toolTip.SetToolTip(cleanupOptions["Spotify"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Кэш Spotify\n" +
+                "Кэшированная музыка. Будет загружена заново при прослушивании.");
+
+            toolTip.SetToolTip(cleanupOptions["VSCode"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Кэш Visual Studio Code\n" +
+                "Временные файлы редактора. Настройки сохранятся.");
+
+            toolTip.SetToolTip(cleanupOptions["Teams"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Кэш Microsoft Teams\n" +
+                "Временные файлы Teams.");
+
+            toolTip.SetToolTip(cleanupOptions["Skype"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Кэш Skype\n" +
+                "Временные файлы Skype.");
+
+            toolTip.SetToolTip(cleanupOptions["Slack"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Кэш Slack\n" +
+                "Временные файлы Slack.");
+
+            // ════════════════════════════════════════════════════════════════
+            // ЧЕКБОКСЫ ОЧИСТКИ - СИСТЕМНЫЕ УТИЛИТЫ
+            // ════════════════════════════════════════════════════════════════
+
+            toolTip.SetToolTip(cleanupOptions["DNS"],
+                "✅ БЕЗОПАСНО\n" +
+                "🔧 Очистка DNS кэша\n" +
+                "Сброс кэша DNS. Помогает решить проблемы с интернетом.");
+
+            toolTip.SetToolTip(cleanupOptions["DISM"],
+                "⚠️ МЕДЛЕННО\n" +
+                "🔧 DISM очистка компонентов\n" +
+                "Глубокая очистка системных компонентов. Занимает много времени.");
+
+            toolTip.SetToolTip(cleanupOptions["ThumbnailCache"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Кэш миниатюр изображений\n" +
+                "Превью картинок. Windows создаст заново при необходимости.");
+
+            toolTip.SetToolTip(cleanupOptions["IconCache"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Кэш иконок\n" +
+                "Кэш значков файлов. Автоматически пересоздастся.");
+
+            toolTip.SetToolTip(cleanupOptions["WindowsUpdate"],
+                "⚠️ ОСТОРОЖНО\n" +
+                "📁 Кэш Windows Update\n" +
+                "Загруженные обновления. Может потребоваться повторная загрузка.");
+
+            toolTip.SetToolTip(cleanupOptions["EventLogs"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Журналы событий Windows\n" +
+                "Логи системных событий. Безопасно удалять старые.");
+
+            toolTip.SetToolTip(cleanupOptions["DeliveryOptimization"],
+                "⚠️ ВНИМАНИЕ\n" +
+                "📁 Оптимизация доставки обновлений\n" +
+                "Кэш обновлений. Освободит место, но обновления загрузятся снова.");
+
+            toolTip.SetToolTip(cleanupOptions["SoftwareDistribution"],
+                "⚠️ ОСТОРОЖНО\n" +
+                "📁 C:\\Windows\\SoftwareDistribution\n" +
+                "Папка распространения обновлений. Может потребовать перезагрузки.");
+
+            toolTip.SetToolTip(cleanupOptions["MemoryDumps"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Дампы памяти при сбоях\n" +
+                "Файлы отладки системных ошибок. Занимают много места.");
+
+            toolTip.SetToolTip(cleanupOptions["ErrorReports"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Отчёты об ошибках Windows\n" +
+                "Отчёты WER. Можно безопасно удалять.");
+
+            toolTip.SetToolTip(cleanupOptions["TempInternet"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Временные файлы интернета\n" +
+                "Кэш IE и системных компонентов.");
+
+            toolTip.SetToolTip(cleanupOptions["FontCache"],
+                "⚠️ ВНИМАНИЕ\n" +
+                "📁 Кэш шрифтов\n" +
+                "Кэш системных шрифтов. Пересоздастся после перезагрузки.");
+
+            // ════════════════════════════════════════════════════════════════
+            // ЧЕКБОКСЫ ОЧИСТКИ - ДОПОЛНИТЕЛЬНО
+            // ════════════════════════════════════════════════════════════════
+
+            toolTip.SetToolTip(cleanupOptions["LogFiles"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Системные .log файлы\n" +
+                "Старые журналы программ и системы.");
+
+            toolTip.SetToolTip(cleanupOptions["OldDrivers"],
+                "❌ ОПАСНО\n" +
+                "📁 Старые драйверы устройств\n" +
+                "Может повлиять на возможность отката драйверов!");
+
+            toolTip.SetToolTip(cleanupOptions["WinSxS"],
+                "❌ КРАЙНЕ ОПАСНО\n" +
+                "📁 WinSxS очистка\n" +
+                "Хранилище компонентов Windows. Может нарушить работу системы!\n" +
+                "Используйте только если точно знаете, что делаете!");
+
+            toolTip.SetToolTip(cleanupOptions["RestorePoints"],
+                "⚠️ ОСТОРОЖНО\n" +
+                "📁 Точки восстановления системы\n" +
+                "Удалит старые точки восстановления. Освободит много места.");
+
+            toolTip.SetToolTip(cleanupOptions["TempUser"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Временные профили пользователей\n" +
+                "Временные данные профилей.");
+
+            toolTip.SetToolTip(cleanupOptions["DiagnosticData"],
+                "✅ БЕЗОПАСНО\n" +
+                "📁 Диагностические данные\n" +
+                "Данные телеметрии Windows.");
         }
 
         private void InitializeComponents()
@@ -52,31 +329,47 @@ namespace CleanupTempPro
             Panel panelTop = new Panel();
             panelTop.Dock = DockStyle.Top;
             panelTop.Height = 120;
-            panelTop.BackColor = Color.FromArgb(37, 37, 38);
+            panelTop.BackColor = ThemeManager.GetBackgroundSecondary();
             this.Controls.Add(panelTop);
 
             lblTitle = new Label();
-            lblTitle.Text = "CleanupTemp Pro Профессиональная";
+            lblTitle.Text = "CleanupTemp Профессиональная";
             lblTitle.Font = new Font("Segoe UI", 18, FontStyle.Bold);
-            lblTitle.ForeColor = Color.FromArgb(0, 150, 255);
+            lblTitle.ForeColor = ThemeManager.GetTextAccent();
             lblTitle.Left = 20;
             lblTitle.Top = 10;
             lblTitle.AutoSize = true;
             panelTop.Controls.Add(lblTitle);
 
             lblVersion = new Label();
-            lblVersion.Text = "v3.0 Финальная";
+            lblVersion.Text = "v4.1 Расширенная";
             lblVersion.Font = new Font("Segoe UI", 8);
-            lblVersion.ForeColor = Color.Gray;
+            lblVersion.ForeColor = ThemeManager.GetTextSecondary();
             lblVersion.Left = 20;
             lblVersion.Top = 45;
             lblVersion.AutoSize = true;
             panelTop.Controls.Add(lblVersion);
 
+            // Кнопка переключения темы
+            btnTheme = new Button();
+            btnTheme.Text = "🌙 Тема";
+            btnTheme.Font = new Font("Segoe UI", 9, FontStyle.Bold);
+            btnTheme.Left = 880;
+            btnTheme.Top = 15;
+            btnTheme.Width = 80;
+            btnTheme.Height = 30;
+            btnTheme.BackColor = ThemeManager.GetButtonSecondary();
+            btnTheme.ForeColor = Color.White;
+            btnTheme.FlatStyle = FlatStyle.Flat;
+            btnTheme.Cursor = Cursors.Hand;
+            btnTheme.FlatAppearance.BorderSize = 0;
+            btnTheme.Click += BtnTheme_Click;
+            panelTop.Controls.Add(btnTheme);
+
             lblStatus = new Label();
             lblStatus.Text = "Готов к очистке";
             lblStatus.Font = new Font("Segoe UI", 10, FontStyle.Bold);
-            lblStatus.ForeColor = Color.FromArgb(0, 255, 127);
+            lblStatus.ForeColor = ThemeManager.GetTextSuccess();
             lblStatus.Left = 20;
             lblStatus.Top = 65;
             lblStatus.Width = 500;
@@ -86,16 +379,16 @@ namespace CleanupTempPro
             lblStats.Text = "0 МБ | 0 файлов | 0 папок | 0с";
             lblStats.Left = 580;
             lblStats.Top = 20;
-            lblStats.Width = 380;
+            lblStats.Width = 280;
             lblStats.Font = new Font("Segoe UI", 10, FontStyle.Bold);
-            lblStats.ForeColor = Color.FromArgb(100, 200, 255);
+            lblStats.ForeColor = ThemeManager.GetTextInfo();
             lblStats.TextAlign = ContentAlignment.MiddleRight;
             panelTop.Controls.Add(lblStats);
 
             Label lblProgress = new Label();
             lblProgress.Text = "Общий прогресс:";
             lblProgress.Font = new Font("Segoe UI", 9);
-            lblProgress.ForeColor = Color.White;
+            lblProgress.ForeColor = ThemeManager.GetTextPrimary();
             lblProgress.Left = 20;
             lblProgress.Top = 90;
             lblProgress.AutoSize = true;
@@ -134,15 +427,15 @@ namespace CleanupTempPro
             Panel panelButtons = new Panel();
             panelButtons.Dock = DockStyle.Bottom;
             panelButtons.Height = 80;
-            panelButtons.BackColor = Color.FromArgb(37, 37, 38);
+            panelButtons.BackColor = ThemeManager.GetBackgroundSecondary();
             this.Controls.Add(panelButtons);
 
-            btnStart = CreateButton("НАЧАТЬ ОЧИСТКУ", 20, 10, 180, 35, Color.FromArgb(0, 150, 255));
-            btnStop = CreateButton("СТОП", 220, 10, 120, 35, Color.FromArgb(220, 50, 50));
-            btnOpenTemp = CreateButton("Открыть Temp", 360, 10, 130, 35, Color.FromArgb(100, 150, 100));
-            btnRefresh = CreateButton("Обновить", 510, 10, 100, 35, Color.FromArgb(100, 100, 200));
-            btnExport = CreateButton("Экспорт лога", 630, 10, 130, 35, Color.FromArgb(150, 100, 150));
-            btnExit = CreateButton("ВЫХОД", 780, 10, 120, 35, Color.FromArgb(100, 100, 100));
+            btnStart = CreateButton("НАЧАТЬ ОЧИСТКУ", 20, 10, 180, 35, ThemeManager.GetButtonPrimary());
+            btnStop = CreateButton("СТОП", 220, 10, 120, 35, ThemeManager.GetButtonDanger());
+            btnOpenTemp = CreateButton("Открыть Temp", 360, 10, 130, 35, ThemeManager.GetButtonSuccess());
+            btnRefresh = CreateButton("Обновить", 510, 10, 100, 35, ThemeManager.GetButtonSecondary());
+            btnExport = CreateButton("Экспорт лога", 630, 10, 130, 35, ThemeManager.GetButtonWarning());
+            btnExit = CreateButton("ВЫХОД", 780, 10, 120, 35, ThemeManager.GetButtonNeutral());
 
             btnStop.Enabled = false;
 
@@ -184,7 +477,7 @@ namespace CleanupTempPro
         private TabPage CreateTab(string title)
         {
             TabPage tab = new TabPage(title);
-            tab.BackColor = Color.FromArgb(30, 30, 30);
+            tab.BackColor = ThemeManager.GetBackgroundPanel();
             tab.Padding = new Padding(10);
             return tab;
         }
@@ -193,16 +486,22 @@ namespace CleanupTempPro
         {
             int yPos = 20;
 
+            // Временные файлы Windows
             GroupBox grpTemp = CreateGroupBox("Временные файлы Windows", yPos);
             cleanupOptions["WinTemp"] = CreateOptionCheckBox("Windows Temp", 20, 25, false);
             cleanupOptions["Prefetch"] = CreateOptionCheckBox("Prefetch", 20, 50, false);
             cleanupOptions["RecycleBin"] = CreateOptionCheckBox("Корзина", 20, 75, false);
+            cleanupOptions["RecentItems"] = CreateOptionCheckBox("Недавние элементы", 300, 25, false);
+            cleanupOptions["TempSetup"] = CreateOptionCheckBox("Временные установки", 300, 50, false);
             grpTemp.Controls.Add(cleanupOptions["WinTemp"]);
             grpTemp.Controls.Add(cleanupOptions["Prefetch"]);
             grpTemp.Controls.Add(cleanupOptions["RecycleBin"]);
+            grpTemp.Controls.Add(cleanupOptions["RecentItems"]);
+            grpTemp.Controls.Add(cleanupOptions["TempSetup"]);
             tab.Controls.Add(grpTemp);
             yPos += 120;
 
+            // Браузеры
             GroupBox grpBrowsers = CreateGroupBox("Браузеры", yPos);
             cleanupOptions["Opera"] = CreateOptionCheckBox("Opera / Opera GX", 20, 25, false);
             cleanupOptions["Chrome"] = CreateOptionCheckBox("Google Chrome", 20, 50, false);
@@ -210,15 +509,20 @@ namespace CleanupTempPro
             cleanupOptions["Firefox"] = CreateOptionCheckBox("Mozilla Firefox", 300, 25, false);
             cleanupOptions["Brave"] = CreateOptionCheckBox("Brave Browser", 300, 50, false);
             cleanupOptions["Yandex"] = CreateOptionCheckBox("Яндекс Браузер", 300, 75, false);
+            cleanupOptions["Vivaldi"] = CreateOptionCheckBox("Vivaldi", 580, 25, false);
+            cleanupOptions["Tor"] = CreateOptionCheckBox("Tor Browser", 580, 50, false);
             grpBrowsers.Controls.Add(cleanupOptions["Opera"]);
             grpBrowsers.Controls.Add(cleanupOptions["Chrome"]);
             grpBrowsers.Controls.Add(cleanupOptions["Edge"]);
             grpBrowsers.Controls.Add(cleanupOptions["Firefox"]);
             grpBrowsers.Controls.Add(cleanupOptions["Brave"]);
             grpBrowsers.Controls.Add(cleanupOptions["Yandex"]);
+            grpBrowsers.Controls.Add(cleanupOptions["Vivaldi"]);
+            grpBrowsers.Controls.Add(cleanupOptions["Tor"]);
             tab.Controls.Add(grpBrowsers);
             yPos += 120;
 
+            // Мессенджеры и приложения
             GroupBox grpMessengers = CreateGroupBox("Мессенджеры и приложения", yPos);
             cleanupOptions["Telegram"] = CreateOptionCheckBox("Telegram", 20, 25, false);
             cleanupOptions["Discord"] = CreateOptionCheckBox("Discord", 20, 50, false);
@@ -226,25 +530,72 @@ namespace CleanupTempPro
             cleanupOptions["Zoom"] = CreateOptionCheckBox("Zoom", 300, 25, false);
             cleanupOptions["Spotify"] = CreateOptionCheckBox("Spotify", 300, 50, false);
             cleanupOptions["VSCode"] = CreateOptionCheckBox("VS Code", 300, 75, false);
+            cleanupOptions["Teams"] = CreateOptionCheckBox("Microsoft Teams", 580, 25, false);
+            cleanupOptions["Skype"] = CreateOptionCheckBox("Skype", 580, 50, false);
+            cleanupOptions["Slack"] = CreateOptionCheckBox("Slack", 580, 75, false);
             grpMessengers.Controls.Add(cleanupOptions["Telegram"]);
             grpMessengers.Controls.Add(cleanupOptions["Discord"]);
             grpMessengers.Controls.Add(cleanupOptions["Viber"]);
             grpMessengers.Controls.Add(cleanupOptions["Zoom"]);
             grpMessengers.Controls.Add(cleanupOptions["Spotify"]);
             grpMessengers.Controls.Add(cleanupOptions["VSCode"]);
+            grpMessengers.Controls.Add(cleanupOptions["Teams"]);
+            grpMessengers.Controls.Add(cleanupOptions["Skype"]);
+            grpMessengers.Controls.Add(cleanupOptions["Slack"]);
             tab.Controls.Add(grpMessengers);
             yPos += 120;
 
-            GroupBox grpSystem = CreateGroupBox("Системные утилиты", yPos);
+            // Расширенные системные утилиты
+            GroupBox grpSystem = CreateGroupBox("Системные утилиты и кэш", yPos);
+            grpSystem.Height = 135;
             cleanupOptions["DNS"] = CreateOptionCheckBox("Очистка DNS кэша", 20, 25, false);
             cleanupOptions["DISM"] = CreateOptionCheckBox("DISM очистка (медленно)", 20, 50, false);
+            cleanupOptions["ThumbnailCache"] = CreateOptionCheckBox("Кэш миниатюр", 20, 75, false);
+            cleanupOptions["IconCache"] = CreateOptionCheckBox("Кэш иконок", 20, 100, false);
+            cleanupOptions["WindowsUpdate"] = CreateOptionCheckBox("Кэш Windows Update", 300, 25, false);
+            cleanupOptions["EventLogs"] = CreateOptionCheckBox("Логи событий Windows", 300, 50, false);
+            cleanupOptions["DeliveryOptimization"] = CreateOptionCheckBox("Оптимизация доставки", 300, 75, false);
+            cleanupOptions["SoftwareDistribution"] = CreateOptionCheckBox("SoftwareDistribution", 300, 100, false);
+            cleanupOptions["MemoryDumps"] = CreateOptionCheckBox("Дампы памяти", 580, 25, false);
+            cleanupOptions["ErrorReports"] = CreateOptionCheckBox("Отчёты об ошибках", 580, 50, false);
+            cleanupOptions["TempInternet"] = CreateOptionCheckBox("Временные файлы интернета", 580, 75, false);
+            cleanupOptions["FontCache"] = CreateOptionCheckBox("Кэш шрифтов", 580, 100, false);
             grpSystem.Controls.Add(cleanupOptions["DNS"]);
             grpSystem.Controls.Add(cleanupOptions["DISM"]);
+            grpSystem.Controls.Add(cleanupOptions["ThumbnailCache"]);
+            grpSystem.Controls.Add(cleanupOptions["IconCache"]);
+            grpSystem.Controls.Add(cleanupOptions["WindowsUpdate"]);
+            grpSystem.Controls.Add(cleanupOptions["EventLogs"]);
+            grpSystem.Controls.Add(cleanupOptions["DeliveryOptimization"]);
+            grpSystem.Controls.Add(cleanupOptions["SoftwareDistribution"]);
+            grpSystem.Controls.Add(cleanupOptions["MemoryDumps"]);
+            grpSystem.Controls.Add(cleanupOptions["ErrorReports"]);
+            grpSystem.Controls.Add(cleanupOptions["TempInternet"]);
+            grpSystem.Controls.Add(cleanupOptions["FontCache"]);
             tab.Controls.Add(grpSystem);
+            yPos += 145;
 
-            Button btnSelectAll = CreateButton("Выбрать всё", 600, 20, 150, 30, Color.FromArgb(0, 150, 255));
-            Button btnDeselectAll = CreateButton("Снять всё", 600, 60, 150, 30, Color.FromArgb(150, 50, 50));
-            Button btnRecommended = CreateButton("Рекомендуемые", 600, 100, 150, 30, Color.FromArgb(100, 150, 100));
+            // Дополнительные опции
+            GroupBox grpAdditional = CreateGroupBox("Дополнительно", yPos);
+            cleanupOptions["LogFiles"] = CreateOptionCheckBox("Системные логи (.log)", 20, 25, false);
+            cleanupOptions["OldDrivers"] = CreateOptionCheckBox("Старые драйверы", 20, 50, false);
+            cleanupOptions["WinSxS"] = CreateOptionCheckBox("WinSxS очистка (осторожно!)", 20, 75, false);
+            cleanupOptions["RestorePoints"] = CreateOptionCheckBox("Старые точки восстановления", 300, 25, false);
+            cleanupOptions["TempUser"] = CreateOptionCheckBox("Временные профили пользователей", 300, 50, false);
+            cleanupOptions["DiagnosticData"] = CreateOptionCheckBox("Диагностические данные", 300, 75, false);
+            grpAdditional.Controls.Add(cleanupOptions["LogFiles"]);
+            grpAdditional.Controls.Add(cleanupOptions["OldDrivers"]);
+            grpAdditional.Controls.Add(cleanupOptions["WinSxS"]);
+            grpAdditional.Controls.Add(cleanupOptions["RestorePoints"]);
+            grpAdditional.Controls.Add(cleanupOptions["TempUser"]);
+            grpAdditional.Controls.Add(cleanupOptions["DiagnosticData"]);
+            tab.Controls.Add(grpAdditional);
+
+            // Кнопки управления
+            Button btnSelectAll = CreateButton("Выбрать всё", 760, 20, 150, 30, ThemeManager.GetButtonPrimary());
+            Button btnDeselectAll = CreateButton("Снять всё", 760, 60, 150, 30, ThemeManager.GetButtonDanger());
+            Button btnRecommended = CreateButton("Рекомендуемые", 760, 100, 150, 30, ThemeManager.GetButtonSuccess());
+            Button btnSafety = CreateButton("Безопасные", 760, 140, 150, 30, ThemeManager.GetButtonSecondary());
 
             btnSelectAll.Click += delegate
             {
@@ -265,11 +616,25 @@ namespace CleanupTempPro
                 cleanupOptions["Chrome"].Checked = true;
                 cleanupOptions["Edge"].Checked = true;
                 cleanupOptions["DNS"].Checked = true;
+                cleanupOptions["ThumbnailCache"].Checked = true;
+                cleanupOptions["EventLogs"].Checked = true;
+                cleanupOptions["ErrorReports"].Checked = true;
+            };
+            btnSafety.Click += delegate
+            {
+                foreach (var cb in cleanupOptions.Values)
+                    cb.Checked = false;
+                cleanupOptions["WinTemp"].Checked = true;
+                cleanupOptions["RecycleBin"].Checked = true;
+                cleanupOptions["RecentItems"].Checked = true;
+                cleanupOptions["ThumbnailCache"].Checked = true;
+                cleanupOptions["TempInternet"].Checked = true;
             };
 
             tab.Controls.Add(btnSelectAll);
             tab.Controls.Add(btnDeselectAll);
             tab.Controls.Add(btnRecommended);
+            tab.Controls.Add(btnSafety);
         }
 
         private void CreateProgressTab(TabPage tab)
@@ -279,7 +644,7 @@ namespace CleanupTempPro
             Label lblInfo = new Label();
             lblInfo.Text = "Отслеживание прогресса в реальном времени";
             lblInfo.Font = new Font("Segoe UI", 11, FontStyle.Bold);
-            lblInfo.ForeColor = Color.FromArgb(0, 150, 255);
+            lblInfo.ForeColor = ThemeManager.GetTextAccent();
             lblInfo.Left = 20;
             lblInfo.Top = yPos;
             lblInfo.AutoSize = true;
@@ -295,7 +660,7 @@ namespace CleanupTempPro
                 Label lbl = new Label();
                 lbl.Text = category;
                 lbl.Font = new Font("Segoe UI", 10, FontStyle.Bold);
-                lbl.ForeColor = Color.FromArgb(100, 200, 255);
+                lbl.ForeColor = ThemeManager.GetTextInfo();
                 lbl.Left = 20;
                 lbl.Top = yPos;
                 lbl.Width = 200;
@@ -330,14 +695,14 @@ namespace CleanupTempPro
             statsPanel.Top = yPos;
             statsPanel.Width = 920;
             statsPanel.Height = 200;
-            statsPanel.BackColor = Color.FromArgb(40, 40, 40);
+            statsPanel.BackColor = ThemeManager.GetBackgroundLight();
             statsPanel.BorderStyle = BorderStyle.FixedSingle;
             tab.Controls.Add(statsPanel);
 
             Label lblStatsTitle = new Label();
             lblStatsTitle.Text = "Статистика сессии";
             lblStatsTitle.Font = new Font("Segoe UI", 12, FontStyle.Bold);
-            lblStatsTitle.ForeColor = Color.FromArgb(0, 150, 255);
+            lblStatsTitle.ForeColor = ThemeManager.GetTextAccent();
             lblStatsTitle.Left = 20;
             lblStatsTitle.Top = 15;
             lblStatsTitle.AutoSize = true;
@@ -346,8 +711,8 @@ namespace CleanupTempPro
             TextBox txtStats = new TextBox();
             txtStats.Multiline = true;
             txtStats.ReadOnly = true;
-            txtStats.BackColor = Color.FromArgb(40, 40, 40);
-            txtStats.ForeColor = Color.White;
+            txtStats.BackColor = ThemeManager.GetBackgroundLight();
+            txtStats.ForeColor = ThemeManager.GetTextPrimary();
             txtStats.BorderStyle = BorderStyle.None;
             txtStats.Font = new Font("Consolas", 10);
             txtStats.Left = 20;
@@ -363,7 +728,7 @@ namespace CleanupTempPro
             Label lblTitle = new Label();
             lblTitle.Text = "История очистки";
             lblTitle.Font = new Font("Segoe UI", 14, FontStyle.Bold);
-            lblTitle.ForeColor = Color.FromArgb(0, 150, 255);
+            lblTitle.ForeColor = ThemeManager.GetTextAccent();
             lblTitle.Left = 20;
             lblTitle.Top = 10;
             lblTitle.AutoSize = true;
@@ -372,7 +737,7 @@ namespace CleanupTempPro
             Label lblSubtitle = new Label();
             lblSubtitle.Text = "Отслеживайте все ваши сессии очистки";
             lblSubtitle.Font = new Font("Segoe UI", 9);
-            lblSubtitle.ForeColor = Color.Gray;
+            lblSubtitle.ForeColor = ThemeManager.GetTextSecondary();
             lblSubtitle.Left = 20;
             lblSubtitle.Top = 38;
             lblSubtitle.AutoSize = true;
@@ -386,8 +751,8 @@ namespace CleanupTempPro
             listViewHistory.View = View.Details;
             listViewHistory.FullRowSelect = true;
             listViewHistory.GridLines = true;
-            listViewHistory.BackColor = Color.FromArgb(40, 40, 40);
-            listViewHistory.ForeColor = Color.White;
+            listViewHistory.BackColor = ThemeManager.GetBackgroundLight();
+            listViewHistory.ForeColor = ThemeManager.GetTextPrimary();
             listViewHistory.Font = new Font("Segoe UI", 9);
 
             listViewHistory.Columns.Add("Дата и время", 180);
@@ -399,8 +764,8 @@ namespace CleanupTempPro
 
             tab.Controls.Add(listViewHistory);
 
-            Button btnClearHistory = CreateButton("Очистить историю", 20, 540, 150, 30, Color.FromArgb(150, 50, 50));
-            Button btnExportHistory = CreateButton("Экспорт истории", 180, 540, 150, 30, Color.FromArgb(100, 100, 200));
+            Button btnClearHistory = CreateButton("Очистить историю", 20, 540, 150, 30, ThemeManager.GetButtonDanger());
+            Button btnExportHistory = CreateButton("Экспорт истории", 180, 540, 150, 30, ThemeManager.GetButtonSecondary());
 
             btnClearHistory.Click += delegate { listViewHistory.Items.Clear(); };
             btnExportHistory.Click += BtnExportHistory_Click;
@@ -414,7 +779,7 @@ namespace CleanupTempPro
             Label lblTitle = new Label();
             lblTitle.Text = "Подробные логи";
             lblTitle.Font = new Font("Segoe UI", 12, FontStyle.Bold);
-            lblTitle.ForeColor = Color.FromArgb(0, 150, 255);
+            lblTitle.ForeColor = ThemeManager.GetTextAccent();
             lblTitle.Left = 20;
             lblTitle.Top = 10;
             lblTitle.AutoSize = true;
@@ -432,8 +797,8 @@ namespace CleanupTempPro
             txtLog.Multiline = true;
             txtLog.ScrollBars = ScrollBars.Vertical;
             txtLog.Dock = DockStyle.Fill;
-            txtLog.BackColor = Color.FromArgb(20, 20, 20);
-            txtLog.ForeColor = Color.FromArgb(0, 255, 127);
+            txtLog.BackColor = ThemeManager.GetBackgroundDark();
+            txtLog.ForeColor = ThemeManager.GetTextSuccess();
             txtLog.Font = new Font("Consolas", 9);
             txtLog.ReadOnly = true;
             txtLog.BorderStyle = BorderStyle.None;
@@ -445,7 +810,7 @@ namespace CleanupTempPro
             GroupBox grp = new GroupBox();
             grp.Text = title;
             grp.Font = new Font("Segoe UI", 10, FontStyle.Bold);
-            grp.ForeColor = Color.FromArgb(100, 200, 255);
+            grp.ForeColor = ThemeManager.GetTextInfo();
             grp.Left = 20;
             grp.Top = top;
             grp.Width = 920;
@@ -462,7 +827,7 @@ namespace CleanupTempPro
             cb.AutoSize = true;
             cb.Checked = isChecked;
             cb.Font = new Font("Segoe UI", 9);
-            cb.ForeColor = Color.White;
+            cb.ForeColor = ThemeManager.GetTextPrimary();
             return cb;
         }
 
@@ -475,7 +840,7 @@ namespace CleanupTempPro
             cb.AutoSize = true;
             cb.Checked = false;
             cb.Font = new Font("Segoe UI", 9);
-            cb.ForeColor = Color.White;
+            cb.ForeColor = ThemeManager.GetTextPrimary();
             return cb;
         }
 
@@ -511,12 +876,48 @@ namespace CleanupTempPro
                 if (ctrl is Button)
                 {
                     Button btn = (Button)ctrl;
-                    if (btn.BackColor != Color.FromArgb(100, 100, 100))
+                    Color originalColor = btn.BackColor;
+
+                    btn.MouseEnter += delegate
                     {
-                        Color originalColor = btn.BackColor;
-                        btn.MouseEnter += delegate { btn.BackColor = LightenColor(originalColor, 30); };
-                        btn.MouseLeave += delegate { btn.BackColor = originalColor; };
-                    }
+                        if (btn.Enabled)
+                        {
+                            int amount = ThemeManager.CurrentTheme == ThemeType.Dark ? 30 : -20;
+                            btn.BackColor = LightenColor(btn.BackColor, amount);
+                        }
+                    };
+                    btn.MouseLeave += delegate
+                    {
+                        if (btn.Enabled)
+                        {
+                            // Восстанавливаем цвет в зависимости от типа кнопки
+                            string btnText = btn.Text.ToLower();
+                            if (btnText.Contains("начать") || btnText.Contains("старт") || btnText.Contains("выбрать всё"))
+                            {
+                                btn.BackColor = ThemeManager.GetButtonPrimary();
+                            }
+                            else if (btnText.Contains("стоп") || btnText.Contains("очистить") || btnText.Contains("снять"))
+                            {
+                                btn.BackColor = ThemeManager.GetButtonDanger();
+                            }
+                            else if (btnText.Contains("открыть") || btnText.Contains("рекомендуемые"))
+                            {
+                                btn.BackColor = ThemeManager.GetButtonSuccess();
+                            }
+                            else if (btnText.Contains("обновить") || btnText.Contains("экспорт") || btnText.Contains("тема"))
+                            {
+                                btn.BackColor = ThemeManager.GetButtonSecondary();
+                            }
+                            else if (btnText.Contains("безопасные"))
+                            {
+                                btn.BackColor = ThemeManager.GetButtonWarning();
+                            }
+                            else
+                            {
+                                btn.BackColor = ThemeManager.GetButtonNeutral();
+                            }
+                        }
+                    };
                 }
                 SetupHoverRecursive(ctrl);
             }
@@ -524,12 +925,13 @@ namespace CleanupTempPro
 
         private Color LightenColor(Color color, int amount)
         {
-            return Color.FromArgb(
-                Math.Min(255, color.R + amount),
-                Math.Min(255, color.G + amount),
-                Math.Min(255, color.B + amount)
-            );
+            int r = Math.Clamp(color.R + amount, 0, 255);
+            int g = Math.Clamp(color.G + amount, 0, 255);
+            int b = Math.Clamp(color.B + amount, 0, 255);
+
+            return Color.FromArgb(color.A, r, g, b);
         }
+
 
         private void SetupCallbacks()
         {
@@ -562,6 +964,48 @@ namespace CleanupTempPro
 
             MessageBox.Show("Статистика обновлена!", "Информация",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private void BtnTheme_Click(object sender, EventArgs e)
+        {
+            // Переключаем тему
+            if (ThemeManager.CurrentTheme == ThemeType.Dark)
+            {
+                ThemeManager.CurrentTheme = ThemeType.Light;
+                btnTheme.Text = "🌙 Тема";
+            }
+            else
+            {
+                ThemeManager.CurrentTheme = ThemeType.Dark;
+                btnTheme.Text = "☀ Тема";
+            }
+
+            // Применяем новую тему
+            ThemeManager.ApplyTheme(this);
+
+            // Обновляем цвет статуса
+            if (lblStatus.Text.Contains("Готов"))
+            {
+                lblStatus.ForeColor = ThemeManager.GetTextSuccess();
+            }
+            else if (lblStatus.Text.Contains("Выполняется"))
+            {
+                lblStatus.ForeColor = ThemeManager.GetTextWarning();
+            }
+            else if (lblStatus.Text.Contains("завершена"))
+            {
+                lblStatus.ForeColor = ThemeManager.GetTextSuccess();
+            }
+            else if (lblStatus.Text.Contains("Отменено"))
+            {
+                lblStatus.ForeColor = Color.Orange;
+            }
+            else if (lblStatus.Text.Contains("ошибка"))
+            {
+                lblStatus.ForeColor = ThemeManager.GetTextError();
+            }
+
+            this.Refresh();
         }
 
         private void BtnExportHistory_Click(object sender, EventArgs e)
@@ -620,6 +1064,21 @@ namespace CleanupTempPro
                 return;
             }
 
+            // Предупреждение для опасных опций
+            if (cleanupOptions["WinSxS"].Checked || cleanupOptions["OldDrivers"].Checked)
+            {
+                var result = MessageBox.Show(
+                    "Вы выбрали потенциально опасные опции очистки!\n\n" +
+                    "WinSxS и старые драйверы могут повлиять на стабильность системы.\n" +
+                    "Продолжить?",
+                    "Внимание!",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning);
+
+                if (result == DialogResult.No)
+                    return;
+            }
+
             btnStart.Enabled = false;
             btnStop.Enabled = true;
             btnOpenTemp.Enabled = false;
@@ -632,7 +1091,7 @@ namespace CleanupTempPro
             pbMain.Value = 0;
 
             lblStatus.Text = "Выполняется очистка...";
-            lblStatus.ForeColor = Color.Yellow;
+            lblStatus.ForeColor = ThemeManager.GetTextWarning();
 
             stopwatch = Stopwatch.StartNew();
             updateTimer.Start();
@@ -703,6 +1162,7 @@ namespace CleanupTempPro
                 }
             }
         }
+
         private async void RunCleanup(CancellationToken token)
         {
             try
@@ -747,7 +1207,7 @@ namespace CleanupTempPro
                     this.Invoke(new Action(() =>
                     {
                         lblStatus.Text = "Очистка завершена!";
-                        lblStatus.ForeColor = Color.FromArgb(0, 255, 127);
+                        lblStatus.ForeColor = ThemeManager.GetTextSuccess();
 
                         AddToHistory("Успешно");
 
@@ -766,7 +1226,7 @@ namespace CleanupTempPro
                 this.Invoke(new Action(() =>
                 {
                     lblStatus.Text = "Произошла ошибка";
-                    lblStatus.ForeColor = Color.Red;
+                    lblStatus.ForeColor = ThemeManager.GetTextError();
                     AddToHistory("Ошибка");
                 }));
             }
@@ -778,14 +1238,20 @@ namespace CleanupTempPro
 
         private string GetCategory(string option)
         {
-            if (option == "WinTemp" || option == "Prefetch" || option == "RecycleBin")
+            if (option == "WinTemp" || option == "Prefetch" || option == "RecycleBin" ||
+                option == "RecentItems" || option == "TempSetup")
                 return "Временные файлы Windows";
+
             if (option == "Opera" || option == "Chrome" || option == "Edge" ||
-                option == "Firefox" || option == "Brave" || option == "Yandex")
+                option == "Firefox" || option == "Brave" || option == "Yandex" ||
+                option == "Vivaldi" || option == "Tor")
                 return "Браузеры";
+
             if (option == "Telegram" || option == "Discord" || option == "Viber" ||
-                option == "Zoom" || option == "Spotify" || option == "VSCode")
+                option == "Zoom" || option == "Spotify" || option == "VSCode" ||
+                option == "Teams" || option == "Skype" || option == "Slack")
                 return "Мессенджеры";
+
             return "Системные утилиты";
         }
 

@@ -52,6 +52,7 @@ namespace CleanupTempPro
             {
                 switch (option)
                 {
+                    // Временные файлы Windows
                     case "WinTemp":
                         await CleanWindowsTemp(token);
                         break;
@@ -61,6 +62,14 @@ namespace CleanupTempPro
                     case "RecycleBin":
                         await CleanRecycleBin(token);
                         break;
+                    case "RecentItems":
+                        await CleanRecentItems(token);
+                        break;
+                    case "TempSetup":
+                        await CleanTempSetup(token);
+                        break;
+
+                    // Браузеры
                     case "Opera":
                         await CleanBrowserCache("Opera", autoClose, token);
                         break;
@@ -79,6 +88,14 @@ namespace CleanupTempPro
                     case "Yandex":
                         await CleanBrowserCache("Яндекс Браузер", autoClose, token);
                         break;
+                    case "Vivaldi":
+                        await CleanBrowserCache("Vivaldi", autoClose, token);
+                        break;
+                    case "Tor":
+                        await CleanBrowserCache("Tor", autoClose, token);
+                        break;
+
+                    // Мессенджеры и приложения
                     case "Telegram":
                         await CleanAppCache("Telegram", autoClose, token);
                         break;
@@ -97,11 +114,72 @@ namespace CleanupTempPro
                     case "VSCode":
                         await CleanAppCache("VS Code", autoClose, token);
                         break;
+                    case "Teams":
+                        await CleanAppCache("Teams", autoClose, token);
+                        break;
+                    case "Skype":
+                        await CleanAppCache("Skype", autoClose, token);
+                        break;
+                    case "Slack":
+                        await CleanAppCache("Slack", autoClose, token);
+                        break;
+
+                    // Системные утилиты
                     case "DNS":
                         await FlushDNS(token);
                         break;
                     case "DISM":
                         await RunDISM(token);
+                        break;
+                    case "ThumbnailCache":
+                        await CleanThumbnailCache(token);
+                        break;
+                    case "IconCache":
+                        await CleanIconCache(token);
+                        break;
+                    case "WindowsUpdate":
+                        await CleanWindowsUpdateCache(token);
+                        break;
+                    case "EventLogs":
+                        await CleanEventLogs(token);
+                        break;
+                    case "DeliveryOptimization":
+                        await CleanDeliveryOptimization(token);
+                        break;
+                    case "SoftwareDistribution":
+                        await CleanSoftwareDistribution(token);
+                        break;
+                    case "MemoryDumps":
+                        await CleanMemoryDumps(token);
+                        break;
+                    case "ErrorReports":
+                        await CleanErrorReports(token);
+                        break;
+                    case "TempInternet":
+                        await CleanTempInternetFiles(token);
+                        break;
+                    case "FontCache":
+                        await CleanFontCache(token);
+                        break;
+
+                    // Дополнительные опции
+                    case "LogFiles":
+                        await CleanLogFiles(token);
+                        break;
+                    case "OldDrivers":
+                        await CleanOldDrivers(token);
+                        break;
+                    case "WinSxS":
+                        await CleanWinSxS(token);
+                        break;
+                    case "RestorePoints":
+                        await CleanOldRestorePoints(token);
+                        break;
+                    case "TempUser":
+                        await CleanTempUserProfiles(token);
+                        break;
+                    case "DiagnosticData":
+                        await CleanDiagnosticData(token);
                         break;
                 }
             }
@@ -111,11 +189,21 @@ namespace CleanupTempPro
             }
         }
 
+        // ========== ВРЕМЕННЫЕ ФАЙЛЫ WINDOWS ==========
+
         private static async Task CleanWindowsTemp(CancellationToken token)
         {
             Log("Очистка папки Windows Temp...");
             string tempPath = Path.GetTempPath();
             await CleanDirectory(tempPath, token);
+
+            // Дополнительная очистка системной папки Temp
+            string systemTemp = @"C:\Windows\Temp";
+            if (Directory.Exists(systemTemp))
+            {
+                await CleanDirectory(systemTemp, token);
+            }
+
             Log($"  ✓ Windows Temp очищен");
         }
 
@@ -151,6 +239,44 @@ namespace CleanupTempPro
             }, token);
         }
 
+        private static async Task CleanRecentItems(CancellationToken token)
+        {
+            Log("Очистка недавних элементов...");
+            string recentPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.Recent));
+
+            if (Directory.Exists(recentPath))
+            {
+                await CleanDirectory(recentPath, token);
+                Log("  ✓ Недавние элементы очищены");
+            }
+            else
+            {
+                Log("  ⚠ Папка недавних элементов не найдена");
+            }
+        }
+
+        private static async Task CleanTempSetup(CancellationToken token)
+        {
+            Log("Очистка временных файлов установки...");
+            string[] setupPaths = new string[]
+            {
+                @"C:\Windows\Installer\$PatchCache$",
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Temp")
+            };
+
+            foreach (string path in setupPaths)
+            {
+                if (Directory.Exists(path) && !token.IsCancellationRequested)
+                {
+                    await CleanDirectory(path, token);
+                }
+            }
+            Log("  ✓ Временные файлы установки очищены");
+        }
+
+        // ========== БРАУЗЕРЫ ==========
+
         private static async Task CleanBrowserCache(string browser, bool autoClose, CancellationToken token)
         {
             Log($"Очистка кэша {browser}...");
@@ -160,6 +286,7 @@ namespace CleanupTempPro
             if (autoClose)
             {
                 await CloseProcessByName(GetBrowserProcessName(browser), token);
+                await Task.Delay(1000, token); // Даём время на закрытие
             }
 
             if (Directory.Exists(cachePath))
@@ -173,6 +300,8 @@ namespace CleanupTempPro
             }
         }
 
+        // ========== МЕССЕНДЖЕРЫ И ПРИЛОЖЕНИЯ ==========
+
         private static async Task CleanAppCache(string app, bool autoClose, CancellationToken token)
         {
             Log($"Очистка кэша {app}...");
@@ -182,6 +311,7 @@ namespace CleanupTempPro
             if (autoClose)
             {
                 await CloseProcessByName(GetAppProcessName(app), token);
+                await Task.Delay(1000, token);
             }
 
             if (Directory.Exists(cachePath))
@@ -205,6 +335,7 @@ namespace CleanupTempPro
             if (autoClose)
             {
                 await CloseProcessByName("Viber", token);
+                await Task.Delay(1000, token);
             }
 
             if (!Directory.Exists(viberBase))
@@ -215,7 +346,6 @@ namespace CleanupTempPro
 
             try
             {
-                // Находим папку с номером пользователя (например, 380969113233)
                 var userFolders = Directory.GetDirectories(viberBase)
                     .Where(d => Path.GetFileName(d).All(char.IsDigit))
                     .ToList();
@@ -229,7 +359,6 @@ namespace CleanupTempPro
                 string userFolder = userFolders[0];
                 Log($"  → Найдена папка пользователя: {Path.GetFileName(userFolder)}");
 
-                // Список безопасных для удаления папок (только кэш и временные файлы!)
                 string[] cacheFolders = new string[]
                 {
                     "Temporary",
@@ -274,6 +403,8 @@ namespace CleanupTempPro
             }
         }
 
+        // ========== СИСТЕМНЫЕ УТИЛИТЫ ==========
+
         private static async Task FlushDNS(CancellationToken token)
         {
             Log("Очистка DNS кэша...");
@@ -306,8 +437,8 @@ namespace CleanupTempPro
                 {
                     Process process = new Process();
                     process.StartInfo.FileName = "DISM.exe";
-                    process.StartInfo.Arguments = "/online /Cleanup-Image /StartComponentCleanup";
-                    process.StartInfo.UseShellExecute = false;
+                    process.StartInfo.Arguments = "/online /Cleanup-Image /StartComponentCleanup /ResetBase";
+                    process.StartInfo.UseShellExecute = true;
                     process.StartInfo.CreateNoWindow = true;
                     process.StartInfo.Verb = "runas";
                     process.Start();
@@ -316,10 +447,351 @@ namespace CleanupTempPro
                 }
                 catch (Exception ex)
                 {
+                    Log($"  ⚠ Ошибка (требуются права администратора): {ex.Message}");
+                }
+            }, token);
+        }
+
+        private static async Task CleanThumbnailCache(CancellationToken token)
+        {
+            Log("Очистка кэша миниатюр...");
+            string thumbCache = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                @"Microsoft\Windows\Explorer");
+
+            if (Directory.Exists(thumbCache))
+            {
+                await CleanDirectory(thumbCache, token);
+                Log("  ✓ Кэш миниатюр очищен");
+            }
+            else
+            {
+                Log("  ⚠ Кэш миниатюр не найден");
+            }
+        }
+
+        private static async Task CleanIconCache(CancellationToken token)
+        {
+            Log("Очистка кэша иконок...");
+            string iconCache = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                @"IconCache.db");
+
+            await Task.Run(() =>
+            {
+                try
+                {
+                    if (File.Exists(iconCache))
+                    {
+                        File.Delete(iconCache);
+                        Log("  ✓ Кэш иконок очищен");
+                    }
+                    else
+                    {
+                        Log("  ⚠ Файл кэша иконок не найден");
+                    }
+                }
+                catch (Exception ex)
+                {
                     Log($"  ⚠ Ошибка: {ex.Message}");
                 }
             }, token);
         }
+
+        private static async Task CleanWindowsUpdateCache(CancellationToken token)
+        {
+            Log("Очистка кэша Windows Update...");
+            string updateCache = @"C:\Windows\SoftwareDistribution\Download";
+
+            if (Directory.Exists(updateCache))
+            {
+                await CleanDirectory(updateCache, token);
+                Log("  ✓ Кэш Windows Update очищен");
+            }
+            else
+            {
+                Log("  ⚠ Кэш Windows Update не найден");
+            }
+        }
+
+        private static async Task CleanEventLogs(CancellationToken token)
+        {
+            Log("Очистка логов событий Windows...");
+            await Task.Run(() =>
+            {
+                try
+                {
+                    Process process = new Process();
+                    process.StartInfo.FileName = "wevtutil";
+                    process.StartInfo.Arguments = "cl System";
+                    process.StartInfo.UseShellExecute = true;
+                    process.StartInfo.CreateNoWindow = true;
+                    process.StartInfo.Verb = "runas";
+                    process.Start();
+                    process.WaitForExit();
+
+                    process.StartInfo.Arguments = "cl Application";
+                    process.Start();
+                    process.WaitForExit();
+
+                    Log("  ✓ Логи событий очищены");
+                }
+                catch (Exception ex)
+                {
+                    Log($"  ⚠ Ошибка (требуются права администратора): {ex.Message}");
+                }
+            }, token);
+        }
+
+        private static async Task CleanDeliveryOptimization(CancellationToken token)
+        {
+            Log("Очистка Оптимизации доставки...");
+            string deliveryPath = @"C:\Windows\ServiceProfiles\NetworkService\AppData\Local\Microsoft\Windows\DeliveryOptimization\Cache";
+
+            if (Directory.Exists(deliveryPath))
+            {
+                await CleanDirectory(deliveryPath, token);
+                Log("  ✓ Оптимизация доставки очищена");
+            }
+            else
+            {
+                Log("  ⚠ Папка Оптимизации доставки не найдена");
+            }
+        }
+
+        private static async Task CleanSoftwareDistribution(CancellationToken token)
+        {
+            Log("Очистка SoftwareDistribution...");
+            string softDist = @"C:\Windows\SoftwareDistribution";
+
+            if (Directory.Exists(softDist))
+            {
+                await CleanDirectory(softDist, token);
+                Log("  ✓ SoftwareDistribution очищена");
+            }
+            else
+            {
+                Log("  ⚠ Папка SoftwareDistribution не найдена");
+            }
+        }
+
+        private static async Task CleanMemoryDumps(CancellationToken token)
+        {
+            Log("Очистка дампов памяти...");
+            string[] dumpPaths = new string[]
+            {
+                @"C:\Windows\Minidump",
+                @"C:\Windows\memory.dmp",
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"CrashDumps")
+            };
+
+            foreach (string path in dumpPaths)
+            {
+                if (token.IsCancellationRequested)
+                    break;
+
+                try
+                {
+                    if (Directory.Exists(path))
+                    {
+                        await CleanDirectory(path, token);
+                    }
+                    else if (File.Exists(path))
+                    {
+                        File.Delete(path);
+                    }
+                }
+                catch { }
+            }
+            Log("  ✓ Дампы памяти очищены");
+        }
+
+        private static async Task CleanErrorReports(CancellationToken token)
+        {
+            Log("Очистка отчётов об ошибках...");
+            string[] errorPaths = new string[]
+            {
+                @"C:\ProgramData\Microsoft\Windows\WER\ReportQueue",
+                @"C:\ProgramData\Microsoft\Windows\WER\ReportArchive",
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Microsoft\Windows\WER")
+            };
+
+            foreach (string path in errorPaths)
+            {
+                if (token.IsCancellationRequested)
+                    break;
+
+                if (Directory.Exists(path))
+                {
+                    await CleanDirectory(path, token);
+                }
+            }
+            Log("  ✓ Отчёты об ошибках очищены");
+        }
+
+        private static async Task CleanTempInternetFiles(CancellationToken token)
+        {
+            Log("Очистка временных файлов интернета...");
+            string inetCache = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                @"Microsoft\Windows\INetCache");
+
+            if (Directory.Exists(inetCache))
+            {
+                await CleanDirectory(inetCache, token);
+                Log("  ✓ Временные файлы интернета очищены");
+            }
+            else
+            {
+                Log("  ⚠ Папка временных файлов интернета не найдена");
+            }
+        }
+
+        private static async Task CleanFontCache(CancellationToken token)
+        {
+            Log("Очистка кэша шрифтов...");
+            string fontCache = @"C:\Windows\ServiceProfiles\LocalService\AppData\Local\FontCache";
+
+            if (Directory.Exists(fontCache))
+            {
+                await CleanDirectory(fontCache, token);
+                Log("  ✓ Кэш шрифтов очищен");
+            }
+            else
+            {
+                Log("  ⚠ Кэш шрифтов не найден");
+            }
+        }
+
+        // ========== ДОПОЛНИТЕЛЬНЫЕ ОПЦИИ ==========
+
+        private static async Task CleanLogFiles(CancellationToken token)
+        {
+            Log("Очистка системных .log файлов...");
+            string[] logPaths = new string[]
+            {
+                @"C:\Windows\Logs",
+                @"C:\Windows\System32\LogFiles"
+            };
+
+            foreach (string path in logPaths)
+            {
+                if (token.IsCancellationRequested)
+                    break;
+
+                if (Directory.Exists(path))
+                {
+                    await CleanDirectory(path, token);
+                }
+            }
+            Log("  ✓ Системные логи очищены");
+        }
+
+        private static async Task CleanOldDrivers(CancellationToken token)
+        {
+            Log("Очистка старых драйверов...");
+            await Task.Run(() =>
+            {
+                try
+                {
+                    Process process = new Process();
+                    process.StartInfo.FileName = "rundll32.exe";
+                    process.StartInfo.Arguments = "pnpclean.dll,RunDLL_PnpClean /DRIVERS /MAXCLEAN";
+                    process.StartInfo.UseShellExecute = true;
+                    process.StartInfo.CreateNoWindow = true;
+                    process.StartInfo.Verb = "runas";
+                    process.Start();
+                    process.WaitForExit();
+                    Log("  ✓ Старые драйверы очищены");
+                }
+                catch (Exception ex)
+                {
+                    Log($"  ⚠ Ошибка (требуются права администратора): {ex.Message}");
+                }
+            }, token);
+        }
+
+        private static async Task CleanWinSxS(CancellationToken token)
+        {
+            Log("Очистка WinSxS (ОСТОРОЖНО! Это может занять много времени)...");
+            await Task.Run(() =>
+            {
+                try
+                {
+                    Process process = new Process();
+                    process.StartInfo.FileName = "DISM.exe";
+                    process.StartInfo.Arguments = "/online /Cleanup-Image /StartComponentCleanup /ResetBase";
+                    process.StartInfo.UseShellExecute = true;
+                    process.StartInfo.CreateNoWindow = true;
+                    process.StartInfo.Verb = "runas";
+                    process.Start();
+                    process.WaitForExit();
+                    Log("  ✓ WinSxS очищена");
+                }
+                catch (Exception ex)
+                {
+                    Log($"  ⚠ Ошибка (требуются права администратора): {ex.Message}");
+                }
+            }, token);
+        }
+
+        private static async Task CleanOldRestorePoints(CancellationToken token)
+        {
+            Log("Удаление старых точек восстановления...");
+            await Task.Run(() =>
+            {
+                try
+                {
+                    Process process = new Process();
+                    process.StartInfo.FileName = "vssadmin";
+                    process.StartInfo.Arguments = "delete shadows /for=c: /oldest";
+                    process.StartInfo.UseShellExecute = true;
+                    process.StartInfo.CreateNoWindow = true;
+                    process.StartInfo.Verb = "runas";
+                    process.Start();
+                    process.WaitForExit();
+                    Log("  ✓ Старые точки восстановления удалены");
+                }
+                catch (Exception ex)
+                {
+                    Log($"  ⚠ Ошибка (требуются права администратора): {ex.Message}");
+                }
+            }, token);
+        }
+
+        private static async Task CleanTempUserProfiles(CancellationToken token)
+        {
+            Log("Очистка временных профилей пользователей...");
+            string tempProfiles = @"C:\Users\Temp";
+
+            if (Directory.Exists(tempProfiles))
+            {
+                await CleanDirectory(tempProfiles, token);
+                Log("  ✓ Временные профили очищены");
+            }
+            else
+            {
+                Log("  ⚠ Временные профили не найдены");
+            }
+        }
+
+        private static async Task CleanDiagnosticData(CancellationToken token)
+        {
+            Log("Очистка диагностических данных...");
+            string diagData = @"C:\ProgramData\Microsoft\Diagnosis";
+
+            if (Directory.Exists(diagData))
+            {
+                await CleanDirectory(diagData, token);
+                Log("  ✓ Диагностические данные очищены");
+            }
+            else
+            {
+                Log("  ⚠ Диагностические данные не найдены");
+            }
+        }
+
+        // ========== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ==========
 
         private static async Task CleanDirectory(string path, CancellationToken token)
         {
@@ -393,30 +865,19 @@ namespace CleanupTempPro
             switch (browser)
             {
                 case "Opera":
-                    // Поддержка всех вариантов установки Opera
                     string operaBase = Path.Combine(appData, @"Opera Software");
-
-                    // 1. Проверяем Opera Stable (стандартная установка)
                     string operaStableCache = Path.Combine(operaBase, @"Opera Stable\Default\Cache");
                     if (Directory.Exists(operaStableCache))
                         return operaStableCache;
 
-                    // 2. Проверяем Opera One
                     string operaOneCache = Path.Combine(operaBase, @"Opera One\Default\Cache");
                     if (Directory.Exists(operaOneCache))
                         return operaOneCache;
 
-                    // 3. Проверяем Opera GX
                     string operaGXCache = Path.Combine(operaBase, @"Opera GX Stable\Default\Cache");
                     if (Directory.Exists(operaGXCache))
                         return operaGXCache;
 
-                    // 4. Проверяем портативную установку
-                    string operaPortableCache = Path.Combine(appData, @"..\Programs\Opera\profile\Cache");
-                    if (Directory.Exists(operaPortableCache))
-                        return Path.GetFullPath(operaPortableCache);
-
-                    // По умолчанию возвращаем стандартный путь Opera Stable
                     return operaStableCache;
 
                 case "Chrome":
@@ -429,6 +890,10 @@ namespace CleanupTempPro
                     return Path.Combine(appData, @"BraveSoftware\Brave-Browser\User Data\Default\Cache");
                 case "Яндекс Браузер":
                     return Path.Combine(appData, @"Yandex\YandexBrowser\User Data\Default\Cache");
+                case "Vivaldi":
+                    return Path.Combine(appData, @"Vivaldi\User Data\Default\Cache");
+                case "Tor":
+                    return Path.Combine(appData, @"Tor Browser\Browser\TorBrowser\Data\Browser\profile.default\cache2");
                 default:
                     return "";
             }
@@ -451,6 +916,12 @@ namespace CleanupTempPro
                     return Path.Combine(localAppData, @"Spotify\Data");
                 case "VS Code":
                     return Path.Combine(appData, @"Code\Cache");
+                case "Teams":
+                    return Path.Combine(appData, @"Microsoft\Teams\Cache");
+                case "Skype":
+                    return Path.Combine(appData, @"Skype\DataRv\Cache");
+                case "Slack":
+                    return Path.Combine(appData, @"Slack\Cache");
                 default:
                     return "";
             }
@@ -466,6 +937,8 @@ namespace CleanupTempPro
                 case "Firefox": return "firefox";
                 case "Brave": return "brave";
                 case "Яндекс Браузер": return "browser";
+                case "Vivaldi": return "vivaldi";
+                case "Tor": return "firefox";
                 default: return "";
             }
         }
@@ -480,6 +953,9 @@ namespace CleanupTempPro
                 case "Zoom": return "Zoom";
                 case "Spotify": return "Spotify";
                 case "VS Code": return "Code";
+                case "Teams": return "Teams";
+                case "Skype": return "Skype";
+                case "Slack": return "Slack";
                 default: return "";
             }
         }
