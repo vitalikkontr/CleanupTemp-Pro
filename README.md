@@ -1,12 +1,12 @@
-<img width="986" height="743" alt="2026-01-19_042504" src="https://github.com/user-attachments/assets/54bc8ba6-3dda-481d-bba3-fcdd31aa8500" />
+<img width="986" height="743" alt="2026-01-31_005354" src="https://github.com/user-attachments/assets/b8819433-0f6e-47a5-befd-4790ba6d2656" />
 
-# CleanupTemp Pro 🧹
+# CleanupTemp Профессиональная 🧹
 
 Программа для очистки временных файлов Windows с графическим интерфейсом.
 
 ## Описание
 
-CleanupTemp Pro — это утилита для Windows, которая помогает освободить место на диске, удаляя временные файлы и кэш системы.
+CleanupTemp — это утилита для Windows, которая помогает освободить место на диске, удаляя временные файлы и кэш системы.
 
 ## Возможности
 
