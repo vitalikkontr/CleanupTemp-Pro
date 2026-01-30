@@ -1,4 +1,5 @@
 <img width="986" height="743" alt="2026-01-31_011136" src="https://github.com/user-attachments/assets/2c207000-02db-43c8-b0e2-0607dfa2016c" />
+
 # CleanupTemp Профессиональная 🧹
 
 Программа для очистки временных файлов Windows с графическим интерфейсом.
