@@ -73,7 +73,8 @@ dotnet build
 ## Автор
 
 Разработано [vitalikkontr](https://github.com/vitalikkontr)
-
+- GitHub: [@vitalikkontr](https://github.com/vitalikkontr)
+- 
 ## Лицензия
 
 Этот проект создан для личного использования.
@@ -86,9 +87,4 @@ dotnet build
 💡 Нашли баг? [Создайте Issue](https://github.com/vitalikkontr/CleanupTemp-Pro/issues)
 
 ⭐ Если проект был полезен, поставьте звезду на GitHub!
-- GitHub: [@vitalikkontr](https://github.com/vitalikkontr)
 
-
-
-
-💡 Нашли баг? [Создайте Issue](https://github.com/vitalikkontr/CleanupTemp-Pro/issues)
