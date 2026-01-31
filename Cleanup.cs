@@ -328,14 +328,13 @@ namespace CleanupTempPro
         private static async Task CleanViberCache(bool autoClose, CancellationToken token)
         {
             Log("Очистка кэша Viber...");
-
             string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
             string viberBase = Path.Combine(appData, @"ViberPC");
 
             if (autoClose)
             {
                 await CloseProcessByName("Viber", token);
-                await Task.Delay(1000, token);
+                await Task.Delay(2000, token);
             }
 
             if (!Directory.Exists(viberBase))
@@ -359,30 +358,41 @@ namespace CleanupTempPro
                 string userFolder = userFolders[0];
                 Log($"  → Найдена папка пользователя: {Path.GetFileName(userFolder)}");
 
-                string[] cacheFolders = new string[]
-                {
-                    "Temporary",
-                    "Thumbnails",
-                    "QmlUriCache",
-                    "QmlWebCache",
-                    "Avatars",
-                    "Backgrounds",
-                    "Icons"
-                };
-
                 int cleanedFolders = 0;
                 long startSize = totalFreedSpace;
 
-                foreach (string folder in cacheFolders)
-                {
-                    if (token.IsCancellationRequested)
-                        break;
+                // ТОЛЬКО САМЫЕ БЕЗОПАСНЫЕ папки для полной очистки
+                string[] safeFolders = new string[] {
+            "Temporary"  // Только временные файлы - 100% безопасно
+        };
 
+                foreach (string folder in safeFolders)
+                {
+                    if (token.IsCancellationRequested) break;
                     string folderPath = Path.Combine(userFolder, folder);
                     if (Directory.Exists(folderPath))
                     {
                         Log($"  → Очистка {folder}...");
-                        await CleanDirectory(folderPath, token);
+                        await CleanDirectoryContents(folderPath, token);
+                        cleanedFolders++;
+                    }
+                }
+
+                // Очистка СТАРЫХ файлов (30+ дней) - более консервативно
+                string[] oldFileFolders = new string[] {
+            "Thumbnails",      // Старые превью можно удалить
+            "QmlUriCache",     // Только старый скомпилированный кэш
+            "QmlWebCache"      // Только старый веб-кэш
+        };
+
+                foreach (string folder in oldFileFolders)
+                {
+                    if (token.IsCancellationRequested) break;
+                    string folderPath = Path.Combine(userFolder, folder);
+                    if (Directory.Exists(folderPath))
+                    {
+                        Log($"  → Очистка старых файлов (30+ дней) в {folder}...");
+                        await CleanOldFiles(folderPath, TimeSpan.FromDays(30), token); // Увеличил до 30 дней
                         cleanedFolders++;
                     }
                 }
@@ -393,13 +403,111 @@ namespace CleanupTempPro
                 if (cleanedFolders > 0)
                     Log($"  ✓ Кэш Viber очищен ({cleanedFolders} папок, {mb:F1} МБ)");
                 else
-                    Log("  ⚠ Папки кэша Viber не найдены или уже пусты");
+                    Log("  ⚠ Папки кэша не найдены или уже пусты");
 
-                Log("  ℹ Важно: Данные аккаунта и сообщения НЕ ТРОНУТЫ!");
+                Log("  ℹ Данные аккаунта и сообщения сохранены");
             }
             catch (Exception ex)
             {
                 Log($"  ⚠ Ошибка очистки Viber: {ex.Message}");
+            }
+        }
+        private static async Task CleanDirectoryContents(string path, CancellationToken token)
+        {
+            if (!Directory.Exists(path))
+                return;
+
+            await Task.Run(() =>
+            {
+                try
+                {
+                    foreach (string file in Directory.GetFiles(path))
+                    {
+                        if (token.IsCancellationRequested) break;
+
+                        try
+                        {
+                            var fi = new FileInfo(file);
+                            totalFreedSpace += fi.Length;
+                            File.Delete(file);
+                        }
+                        catch { }
+                    }
+
+                    foreach (string dir in Directory.GetDirectories(path))
+                    {
+                        if (token.IsCancellationRequested) break;
+
+                        try
+                        {
+                            long size = GetDirectorySize(dir);
+                            totalFreedSpace += size;
+                            Directory.Delete(dir, true);
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+            }, token);
+        }
+
+
+        private static async Task CleanOldFiles(string path, TimeSpan maxAge, CancellationToken token)
+        {
+            if (!Directory.Exists(path))
+                return;
+
+            await Task.Run(() =>
+            {
+                try
+                {
+                    DateTime cutoff = DateTime.Now - maxAge;
+
+                    foreach (string file in Directory.GetFiles(path, "*", SearchOption.AllDirectories))
+                    {
+                        if (token.IsCancellationRequested) break;
+
+                        try
+                        {
+                            var fi = new FileInfo(file);
+                            if (fi.LastAccessTime < cutoff)
+                            {
+                                totalFreedSpace += fi.Length;
+                                File.Delete(file);
+                            }
+                        }
+                        catch { }
+                    }
+
+                    // Удаляем пустые папки
+                    foreach (string dir in Directory.GetDirectories(path))
+                    {
+                        if (token.IsCancellationRequested) break;
+
+                        try
+                        {
+                            if (!Directory.EnumerateFileSystemEntries(dir).Any())
+                                Directory.Delete(dir, false);
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+            }, token);
+        }
+
+        // Вспомогательный метод для подсчета размера папки
+        private static long GetDirectorySize(string path)
+        {
+            try
+            {
+                return new DirectoryInfo(path)
+                    .GetFiles("*", SearchOption.AllDirectories)
+                    .Sum(fi => fi.Length);
+            }
+            catch
+            {
+                return 0;
             }
         }
 
