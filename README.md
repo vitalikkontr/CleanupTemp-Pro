@@ -72,9 +72,9 @@ dotnet build
 
 ## Автор
 
-Разработано [vitalikkontr](https://github.com/vitalikkontr)
+Разработано
 - GitHub: [@vitalikkontr](https://github.com/vitalikkontr)
-- 
+
 ## Лицензия
 
 Этот проект создан для личного использования.
