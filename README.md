@@ -88,3 +88,12 @@ dotnet build
 ---
 ⭐ Если проект был полезен, поставьте звезду на GitHub!
 
+<div align="center">
+
+**Сделано с ❤️ в Украине**
+
+[![Made in Ukraine](https://img.shields.io/badge/made_in-ukraine-ffd700.svg?labelColor=0057b7)](https://stand-with-ukraine.pp.ua)
+
+**Поддержите проект ⭐**
+
+</div>
