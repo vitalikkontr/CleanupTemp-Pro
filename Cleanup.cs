@@ -181,6 +181,9 @@ namespace CleanupTempPro
                     case "DiagnosticData":
                         await CleanDiagnosticData(token);
                         break;
+                    case "RegistryCleanup":
+                        await CleanRegistry(token);
+                        break;
                 }
             }
             catch (Exception ex)
@@ -1067,6 +1070,36 @@ namespace CleanupTempPro
                 default: return "";
             }
         }
+
+        private static async Task CleanRegistry(CancellationToken token)
+        {
+            Log("Очистка реестра...");
+            await Task.Run(() =>
+            {
+                try
+                {
+                    using (Process process = new Process())
+                    {
+                        process.StartInfo.FileName = "cmd.exe";
+                        process.StartInfo.Arguments = "/c reg delete \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs\" /f";
+                        process.StartInfo.UseShellExecute = false;
+                        process.StartInfo.CreateNoWindow = true;
+                        process.StartInfo.RedirectStandardOutput = true;
+                        process.StartInfo.Verb = "runas";
+                        
+                        process.Start();
+                        process.WaitForExit(5000);
+                    }
+                    
+                    Log("  ✓ Реестр очищен");
+                }
+                catch (Exception ex)
+                {
+                    Log($"  ⚠ Ошибка очистки реестра: {ex.Message}");
+                }
+            }, token);
+        }
+
 
         private static void Log(string message)
         {
