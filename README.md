@@ -1,4 +1,4 @@
-<div align="center"><img width="1160" height="820" alt="2026-02-20_011017" src="https://github.com/user-attachments/assets/695ebad6-f181-4e0e-aebb-be34c46dad9d" />
+<div align="center"><img width="1160" height="820" alt="2026-02-20_011017" src="https://github.com/user-attachments/assets/d07db14c-4a75-4c82-bfaa-9d783d56aa79" />
 
 # 🧹 CleanupTemp Pro
 
@@ -9,6 +9,7 @@
 </div>
 <div align="center">
 <a href="https://dotnet.microsoft.com/en-us/download/dotnet/8.0" target="_blank">
+
 <img src="https://img.shields.io/badge/.NET-8.0-blue" alt=".NET 8.0">
 </a>
 <a href="https://www.microsoft.com/windows" target="_blank">
