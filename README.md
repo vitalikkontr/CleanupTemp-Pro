@@ -5,7 +5,19 @@
 
 **Красивая утилита очистки системы на WPF (.NET 8)**
 </div>
----
+
+</div>
+<div align="center">
+<a href="https://dotnet.microsoft.com/en-us/download/dotnet/8.0" target="_blank">
+<img src="https://img.shields.io/badge/.NET-8.0-blue" alt=".NET 8.0">
+</a>
+<a href="https://www.microsoft.com/windows" target="_blank">
+<img src="https://img.shields.io/badge/Windows-10%2F11-brightgreen" alt="Windows 10/11">
+</a>
+<a href="https://learn.microsoft.com/en-us/dotnet/desktop/winforms/" target="_blank">
+<img src="https://img.shields.io/badge/UI-Windows%20Forms-orange" alt="Windows Forms">
+</a>
+</div>
 
 ## ✨ Возможности
 
@@ -71,6 +83,23 @@ dotnet run --project CleanupTemp_Pro/CleanupTemp_Pro.csproj
 | Эффекты | Glow, градиенты, анимации |
 | Окно | Кастомное (без системной рамки) |
 
+## 👨‍💻 Автор
+
+Разработано
+- GitHub: [@vitalikkontr](https://github.com/vitalikkontr)
+
+## ⚖️ Лицензия
+
+Для личного использования.
+
 ---
 
-*CleanupTemp Pro v3.0 — сделано с ❤️*
+💡 Нашли баг? [Создайте Issue](https://github.com/vitalikkontr/CleanupTemp-Pro/issues)
+
+⭐ Если проект был полезен, поставьте звезду на GitHub!
+
+<div align="center">
+
+## Сделано с ❤️ в Украине
+
+</div>
