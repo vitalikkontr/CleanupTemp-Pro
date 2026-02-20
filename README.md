@@ -1,6 +1,6 @@
 <div align="center"><img width="1160" height="820" alt="2026-02-20_011017" src="https://github.com/user-attachments/assets/d07db14c-4a75-4c82-bfaa-9d783d56aa79" />
 
-# 🧹 CleanupTemp Pro
+# 🧹 Cleanup Temp Pro
 
 **Красивая утилита очистки системы на WPF (.NET 8)**
 </div>
