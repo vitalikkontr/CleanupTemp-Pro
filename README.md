@@ -1,6 +1,19 @@
-# 🧹 CleanupTemp Pro
+<div align="center"><img width="1160" height="820" alt="logo" src="https://github.com/user-attachments/assets/679c6a8f-1a46-432c-933d-7b5fe3d0b132" />
 
-**Красивая утилита очистки системы на WPF (.NET 8)**
+# Мощная и удобная утилита для безопасной очистки временных файлов и кэша. Идеальна для поддержания чистоты системы и экономии места на дисках. Чистит лучше чем другие! 🧹
+ 
+</div>
+<div align="center">
+<a href="https://dotnet.microsoft.com/en-us/download/dotnet/8.0" target="_blank">
+<img src="https://img.shields.io/badge/.NET-8.0-blue" alt=".NET 8.0">
+</a>
+<a href="https://www.microsoft.com/windows" target="_blank">
+<img src="https://img.shields.io/badge/Windows-10%2F11-brightgreen" alt="Windows 10/11">
+</a>
+<a href="https://learn.microsoft.com/en-us/dotnet/desktop/winforms/" target="_blank">
+<img src="https://img.shields.io/badge/UI-Windows%20Forms-orange" alt="Windows Forms">
+</a>
+</div>
 
 ---
 
@@ -34,6 +47,12 @@
 ### Требования
 - Windows 10/11
 - .NET 8 SDK или Runtime ([скачать](https://dotnet.microsoft.com/download/dotnet/8.0))
+- 
+## 📥 Установка
+
+1. [Скачайте последнюю версию](https://github.com/vitalikkontr/CleanupTemp-Pro/releases/latest)
+2. Запустите установщик CleanupTemp-Pro-Setup-v3.0.1
+3. Следуйте инструкциям мастера установки
 
 ### Сборка и запуск
 ```bash
