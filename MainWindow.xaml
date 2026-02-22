@@ -93,7 +93,7 @@
                                     <Run Text=" Pro" Foreground="#06D6C7"
                                          FontFamily="Segoe UI Semibold"/>
                                 </TextBlock>
-                                <TextBlock Text="System Cleaner v3.0"
+                                <TextBlock Text="System Cleaner v3.0.1"
                                            FontFamily="Segoe UI" FontSize="10"
                                            Foreground="{StaticResource TextSecondaryBrush}"
                                            Margin="0,1,0,0"/>
@@ -127,7 +127,7 @@
                                     Click="AboutBtn_Click"
                                     Style="{StaticResource TitleBarButton}"
                                     Margin="0,0,6,0" ToolTip="О программе"/>
-                            <Button Content="─" Width="38" Height="30" FontSize="13"
+                            <Button Content="−" Width="38" Height="30" FontSize="13"
                                     Cursor="Hand"
                                     Click="MinBtn_Click"
                                     Style="{StaticResource TitleBarButton}"
@@ -690,7 +690,7 @@
                         Background="#0A0A18" BorderBrush="#1A1A3A"
                         BorderThickness="0,1,0,0">
                     <Grid Margin="20,0">
-                        <TextBlock Text="CleanupTemp Pro v3.0  •  Запускайте от имени администратора для полной очистки"
+                        <TextBlock Text="CleanupTemp Pro v3.0.1  •  Запускайте от имени администратора для полной очистки"
                                    FontFamily="Segoe UI" FontSize="11"
                                    Foreground="#3A3A6A" VerticalAlignment="Center"/>
                         <TextBlock Text="© 2026 CleanupTemp Pro"

@@ -102,7 +102,18 @@ namespace CleanupTemp_Pro
                     grid.ColumnDefinitions.Add(new ColumnDefinition());
                     grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                     var label = new TextBlock { Text = row.Label, FontSize = 12, Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0xBB)), VerticalAlignment = VerticalAlignment.Center };
-                    var val = new TextBlock { Text = row.Value, FontSize = 12, FontWeight = FontWeights.Bold, Foreground = (SolidColorBrush)new BrushConverter().ConvertFromString(row.Color), VerticalAlignment = VerticalAlignment.Center };
+                    var brush = new SolidColorBrush(
+                        (Color)ColorConverter.ConvertFromString(row.Color)!
+                    );
+
+                    var val = new TextBlock
+                    {
+                        Text = row.Value,
+                        FontSize = 12,
+                        FontWeight = FontWeights.Bold,
+                        Foreground = brush,
+                        VerticalAlignment = VerticalAlignment.Center
+                    };
                     Grid.SetColumn(val, 1);
                     grid.Children.Add(label); grid.Children.Add(val);
                     StatsStack.Children.Add(grid);
@@ -127,18 +138,22 @@ namespace CleanupTemp_Pro
         private void OkBorder_Enter(object sender, MouseEventArgs e)
         {
             OkBtnBorder.Opacity = 1.0;
-            // Ярко светлеем — меняем фон на более насыщенный
+            // Осветляем на основе исходного цвета кнопки (зависит от kind)
+            // Добавляем белый стоп посередине для эффекта "glow"
             OkBtnBorder.Background = new LinearGradientBrush(
                 new GradientStopCollection {
-                    new GradientStop(Color.FromRgb(0xFF, 0x2E, 0x95), 0.0),
-                    new GradientStop(Color.FromRgb(0xBB, 0x44, 0xFF), 0.5),
-                    new GradientStop(Color.FromRgb(0x55, 0xAA, 0xFF), 1.0)
+                    new GradientStop(_okBtnC1, 0.0),
+                    new GradientStop(Color.FromArgb(0xDD,
+                        (byte)Math.Min(255, _okBtnC1.R + 50),
+                        (byte)Math.Min(255, _okBtnC1.G + 50),
+                        (byte)Math.Min(255, _okBtnC1.B + 50)), 0.5),
+                    new GradientStop(_okBtnC2, 1.0)
                 },
                 new Point(0, 0.5), new Point(1, 0.5));
             OkBtnBorder.Effect = new System.Windows.Media.Effects.DropShadowEffect
             {
-                Color = Color.FromRgb(0xFF, 0x2E, 0x95),
-                BlurRadius = 35, ShadowDepth = 0, Opacity = 1.0
+                Color = _okBtnC1,
+                BlurRadius = 35, ShadowDepth = 0, Opacity = 0.9
             };
         }
         private void OkBorder_Leave(object sender, MouseEventArgs e)

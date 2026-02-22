@@ -14,6 +14,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
+using System.Windows.Interop;
 using System.Windows.Threading;
 
 namespace CleanupTemp_Pro
@@ -192,6 +193,9 @@ namespace CleanupTemp_Pro
             if (_settingsLoaded) SaveSettings();
         }
 
+        // ── USB HOTPLUG ───────────────────────────────────────────────────
+        private HwndSource? _hwndSource;
+
         public MainWindow()
         {
             InitializeComponent();
@@ -199,10 +203,87 @@ namespace CleanupTemp_Pro
             HistoryListView.ItemsSource = _historyItems;
             LoadLogo();
             LoadDiskInfo();
-            LoadSettings();   // ← восстанавливаем галочки
+            LoadSettings();
             SetStatus("Готов к работе", StatusKind.Ready);
             StartPulse();
-            Closing += (_, _) => SaveSettings();  // ← сохраняем при закрытии
+            SourceInitialized += (_, _) => InitUsbDetection();
+            Closing += (_, _) =>
+            {
+                SaveSettings();
+                _hwndSource?.RemoveHook(WndProc);
+                _hwndSource?.Dispose();
+            };
+        }
+
+        // ── USB HOTPLUG — обнаружение флешек в реальном времени ─────────
+        private const int WM_DEVICECHANGE          = 0x0219;
+        private const int DBT_DEVICEARRIVAL        = 0x8000;
+        private const int DBT_DEVICEREMOVECOMPLETE = 0x8004;
+        private const int DBT_DEVTYP_VOLUME        = 0x0002;
+        private const int DBTF_MEDIA               = 0x0001; // CD/DVD — пропускаем
+        private const int DBTF_NET                 = 0x0002; // сетевой диск — пропускаем
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct DEV_BROADCAST_VOLUME
+        {
+            public int   dbcv_size;
+            public int   dbcv_devicetype;
+            public int   dbcv_reserved;
+            public int   dbcv_unitmask; // бит 0=A: бит 1=B: бит 2=C: ... бит 25=Z:
+            public short dbcv_flags;
+        }
+
+        private void InitUsbDetection()
+        {
+            var helper = new WindowInteropHelper(this);
+            _hwndSource = HwndSource.FromHwnd(helper.Handle);
+            _hwndSource?.AddHook(WndProc);
+        }
+
+        private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            if (msg != WM_DEVICECHANGE) return IntPtr.Zero;
+
+            int ev = wParam.ToInt32();
+            if (ev != DBT_DEVICEARRIVAL && ev != DBT_DEVICEREMOVECOMPLETE)
+                return IntPtr.Zero;
+
+            if (lParam == IntPtr.Zero) return IntPtr.Zero;
+
+            var vol = Marshal.PtrToStructure<DEV_BROADCAST_VOLUME>(lParam);
+            if (vol.dbcv_devicetype != DBT_DEVTYP_VOLUME) return IntPtr.Zero;
+            if ((vol.dbcv_flags & DBTF_MEDIA) != 0)       return IntPtr.Zero;
+            if ((vol.dbcv_flags & DBTF_NET)   != 0)       return IntPtr.Zero;
+
+            bool arrival = (ev == DBT_DEVICEARRIVAL);
+            for (int i = 0; i < 26; i++)
+                if ((vol.dbcv_unitmask & (1 << i)) != 0)
+                    OnUsbDriveChanged((char)('A' + i), arrival);
+
+            return IntPtr.Zero;
+        }
+
+        private void OnUsbDriveChanged(char letter, bool arrived)
+        {
+            if (arrived)
+            {
+                // Пауза 700 мс — Windows монтирует том не мгновенно
+                var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
+                t.Tick += (_, _) =>
+                {
+                    t.Stop();
+                    LoadDiskInfo();
+                    SetStatus(ChkExternalDrives?.IsChecked == true
+                        ? $"💾  Флешка {letter}: подключена — нажмите «Сканировать»"
+                        : $"💾  Флешка {letter}: подключена", StatusKind.Ready);
+                };
+                t.Start();
+            }
+            else
+            {
+                LoadDiskInfo();
+                SetStatus($"📤  Диск {letter}: отключён", StatusKind.Stopped);
+            }
         }
 
         // ── LOGO ─────────────────────────────────────────────────────────
@@ -518,11 +599,7 @@ namespace CleanupTemp_Pro
         private void ScanBorder_Leave(object sender, MouseEventArgs e)
         {
             ScanBtnBorder.Opacity = _isRunning ? 0.4 : 1.0;
-            ScanBtnBorder.Effect = new System.Windows.Media.Effects.DropShadowEffect
-            {
-                Color = Color.FromRgb(0x4A, 0x9E, 0xFF),
-                BlurRadius = 18, ShadowDepth = 0, Opacity = 0.55
-            };
+            ScanBtnBorder.Effect = null;
         }
 
         // CLEAN
@@ -661,8 +738,14 @@ namespace CleanupTemp_Pro
                 }
                 else if (_fileItems.Count > 0)
                 {
+                    // ИСПРАВЛЕНИЕ #3: подсказка о браузерах, если они запущены
+                    bool browsersOpen = ChkBrowserCache?.IsChecked == true &&
+                        new[] { "chrome", "msedge", "firefox", "brave", "opera", "browser", "vivaldi" }
+                            .Any(n => Process.GetProcessesByName(n).Length > 0);
+
+                    string hint = browsersOpen ? " ⚠ закройте браузеры перед очисткой" : "";
                     SetProgress(100, $"Найдено {_fileItems.Count} объектов • {SizeHelper.Format(_totalFoundBytes)}");
-                    SetStatus($"Найдено {SizeHelper.Format(_totalFoundBytes)} мусора", StatusKind.Found);
+                    SetStatus($"Найдено {SizeHelper.Format(_totalFoundBytes)} мусора{hint}", StatusKind.Found);
                 }
                 else
                 {
@@ -852,7 +935,14 @@ namespace CleanupTemp_Pro
                 L.Add((@"C:\Windows\System32\winevt\Logs", "Логи событий", "📋"));
 
             if (ChkDnsCache?.IsChecked == true)
-                L.Add((System.IO.Path.Combine(local, @"Microsoft\Windows\INetCache"), "IE/Edge Cache", "🔗"));
+            {
+                // INetCache — кэш IE и Edge Legacy (не дублируется с Chromium Edge из BrowserCache)
+                L.Add((System.IO.Path.Combine(local, @"Microsoft\Windows\INetCache"), "IE/Edge Legacy Cache", "🔗"));
+                // WebCache — база данных истории/кэша Edge Legacy
+                string webCachePath = System.IO.Path.Combine(local, @"Microsoft\Windows\WebCache");
+                if (Directory.Exists(webCachePath))
+                    L.Add((webCachePath, "Edge Legacy WebCache", "🔗"));
+            }
 
             if (ChkMSOffice?.IsChecked == true)
             {
@@ -1062,6 +1152,37 @@ namespace CleanupTemp_Pro
             dlg.ShowDialog();
             if (!dlg.Result) return;
 
+            // ИСПРАВЛЕНИЕ #2: предупреждаем об открытых браузерах перед очисткой кэша
+            if (ChkBrowserCache?.IsChecked == true)
+            {
+                var browserProcesses = new Dictionary<string, string>
+                {
+                    { "chrome",          "Google Chrome"   },
+                    { "msedge",          "Microsoft Edge"  },
+                    { "firefox",         "Firefox"         },
+                    { "brave",           "Brave"           },
+                    { "opera",           "Opera"           },
+                    { "operagx",         "Opera GX"        },
+                    { "browser",         "Яндекс Браузер"  },
+                    { "vivaldi",         "Vivaldi"         },
+                };
+                var runningBrowsers = browserProcesses
+                    .Where(b => Process.GetProcessesByName(b.Key).Length > 0)
+                    .Select(b => b.Value)
+                    .ToList();
+
+                if (runningBrowsers.Count > 0)
+                {
+                    var warnDlg = new CustomDialog(
+                        "Браузеры открыты!",
+                        $"Обнаружены запущенные браузеры:\n{string.Join(", ", runningBrowsers)}\n\nКэш будет удалён, но браузер немедленно воссоздаст его. Именно поэтому после очистки снова находится мусор.\n\nРекомендуется закрыть браузеры и повторить очистку.",
+                        DialogKind.Warning,
+                        showCancel: true);
+                    warnDlg.ShowDialog();
+                    if (!warnDlg.Result) return;
+                }
+            }
+
             _isRunning = true;
             // Dispose старого CTS перед созданием нового
             _cts?.Dispose();
@@ -1119,7 +1240,7 @@ namespace CleanupTemp_Pro
                                     .ToList();
                                 SetProgress(regular.Count > 0 ? d2 * 100.0 / regular.Count : 100,
                                     $"Удалено {d2} / {regular.Count} • {SizeHelper.Format(c2)}");
-                                StatCleaned.Text = $"{c2 / (1024.0 * 1024):F1}";
+                                StatCleaned.Text = SizeHelper.Format(c2);
                                 foreach (var r in toRemove) _fileItems.Remove(r);
                             }, DispatcherPriority.Background);
                         }
@@ -1139,7 +1260,7 @@ namespace CleanupTemp_Pro
                             {
                                 var rb = _fileItems.FirstOrDefault(x => x.Category == "Корзина");
                                 if (rb != null) _fileItems.Remove(rb);
-                                StatCleaned.Text    = $"{c3 / (1024.0 * 1024):F1}";
+                                StatCleaned.Text    = SizeHelper.Format(c3);
                                 StatRecycleBin.Text = "0";
                             });
                         }
@@ -1158,6 +1279,14 @@ namespace CleanupTemp_Pro
                 _totalFoundBytes = 0;
                 long freed = _cleanedBytes;
                 _cleanedBytes = 0;
+                // ИСПРАВЛЕНИЕ #1: сбрасываем счётчики статистики после очистки,
+                // иначе при повторном сканировании они суммируются со старыми значениями
+                _statTemp    = 0;
+                _statBrowser = 0;
+                _statRecycle = 0;
+                StatTempFiles.Text    = "0";
+                StatBrowserFiles.Text = "0";
+                StatRecycleBin.Text   = "0";
                 SetUiRunning(false, false);
 
                 if (wasCancelled)
