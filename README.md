@@ -105,6 +105,6 @@ dotnet run --project CleanupTemp_Pro/CleanupTemp_Pro.csproj
 
 <div align="center">
 
-## *CleanupTemp Pro v3.0.1 — сделано с ❤️ в Украине*
+## *CleanupTemp Pro — сделано с ❤️ в Украине*
 
 
