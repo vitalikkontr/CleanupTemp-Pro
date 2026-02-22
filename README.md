@@ -88,5 +88,23 @@ dotnet run --project CleanupTemp_Pro/CleanupTemp_Pro.csproj
 | Окно | Кастомное (без системной рамки) |
 
 ---
+## 👨‍💻 Автор
 
-*CleanupTemp Pro v3.0 — сделано с ❤️*
+Разработано
+- GitHub: [@vitalikkontr](https://github.com/vitalikkontr)
+
+## ⚖️ Лицензия
+
+Для личного использования.
+
+---
+
+💡 Нашли баг? [Создайте Issue](https://github.com/vitalikkontr/CleanupTemp-Pro/issues)
+
+⭐ Если проект был полезен, поставьте звезду на GitHub!
+
+<div align="center">
+
+## *CleanupTemp Pro v3.0.1 — сделано с ❤️ в Украине*
+
+
