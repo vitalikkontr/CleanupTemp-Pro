@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.ServiceProcess;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -64,39 +65,34 @@ namespace CleanupTemp_Pro
         private long _totalFoundBytes;
         private long _cleanedBytes;
         private bool _isRunning;
-        private bool _canClean;          // управляет доступностью CleanBtnBorder
-        private bool _canStop;           // управляет доступностью StopBtnBorder
+        private bool _canClean;
+        private bool _canStop;
         private int  _statTemp, _statBrowser, _statRecycle;
         private DispatcherTimer? _pulseTimer;
         private bool _showingHistory;
+        // Флаг: операция была прервана уходом системы в сон
+        // (нужен т.к. к моменту пробуждения Task.Run уже мог сбросить _isRunning)
+        private volatile bool _wasInterruptedBySleep;
 
         // ── ЗАЩИЩЁННЫЕ ПАПКИ ─────────────────────────────────────────
-        // Если путь содержит любую из этих папок — файл не трогаем
         private static readonly HashSet<string> _protectedFolderNames =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            // Мессенджеры
             "ViberPC", "Viber", "Telegram Desktop", "Telegram",
             "WhatsApp", "Signal", "Skype", "Discord",
             "Slack", "Teams", "Element",
-            // Почта
             "Thunderbird", "Outlook",
-            // Облачные хранилища
             "Dropbox", "OneDrive", "Google Drive", "Yandex.Disk",
-            // Игровые платформы
             "Steam", "Epic Games", "GOG Galaxy", "Battle.net",
-            // Пользовательские данные — никогда не трогаем
             "Documents", "Документы", "Мои документы",
             "Downloads", "Загрузки",
             "Pictures", "Изображения", "Мои рисунки",
             "Videos", "Видео", "Мои видеозаписи",
             "Music", "Музыка", "Моя музыка",
             "Desktop", "Рабочий стол",
-            // Несохранённые документы Office
             "UnsavedFiles",
         };
 
-        // Расширения и имена мусорных файлов — используются при сканировании корня диска
         private static readonly HashSet<string> _junkExtensions =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -163,7 +159,7 @@ namespace CleanupTemp_Pro
             catch { }
         }
 
-        private bool _settingsLoaded = false; // защита от сохранения во время LoadSettings
+        private bool _settingsLoaded = false;
 
         private void LoadSettings()
         {
@@ -187,7 +183,6 @@ namespace CleanupTemp_Pro
             finally { _settingsLoaded = true; }
         }
 
-        // Вызывается при ручном клике на любой чекбокс
         private void Chk_Changed(object sender, RoutedEventArgs e)
         {
             if (_settingsLoaded) SaveSettings();
@@ -215,13 +210,18 @@ namespace CleanupTemp_Pro
             };
         }
 
-        // ── USB HOTPLUG — обнаружение флешек в реальном времени ─────────
         private const int WM_DEVICECHANGE          = 0x0219;
         private const int DBT_DEVICEARRIVAL        = 0x8000;
         private const int DBT_DEVICEREMOVECOMPLETE = 0x8004;
         private const int DBT_DEVTYP_VOLUME        = 0x0002;
-        private const int DBTF_MEDIA               = 0x0001; // CD/DVD — пропускаем
-        private const int DBTF_NET                 = 0x0002; // сетевой диск — пропускаем
+        private const int DBTF_MEDIA               = 0x0001;
+        private const int DBTF_NET                 = 0x0002;
+
+        // ── SLEEP / WAKE ──────────────────────────────────────────────────
+        private const int WM_POWERBROADCAST        = 0x0218;
+        private const int PBT_APMSUSPEND           = 0x0004; // система уходит в сон
+        private const int PBT_APMRESUMESUSPEND     = 0x0007; // пробуждение после сна
+        private const int PBT_APMRESUMEAUTOMATIC   = 0x0012; // пробуждение (автоматическое/по таймеру)
 
         [StructLayout(LayoutKind.Sequential)]
         private struct DEV_BROADCAST_VOLUME
@@ -229,7 +229,7 @@ namespace CleanupTemp_Pro
             public int   dbcv_size;
             public int   dbcv_devicetype;
             public int   dbcv_reserved;
-            public int   dbcv_unitmask; // бит 0=A: бит 1=B: бит 2=C: ... бит 25=Z:
+            public int   dbcv_unitmask;
             public short dbcv_flags;
         }
 
@@ -242,10 +242,31 @@ namespace CleanupTemp_Pro
 
         private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
+            // ── Сон / Пробуждение ─────────────────────────────────────────
+            if (msg == WM_POWERBROADCAST)
+            {
+                int ev = wParam.ToInt32();
+
+                if (ev == PBT_APMSUSPEND)
+                {
+                    // Система уходит в сон — отменяем текущую операцию
+                    // чтобы после пробуждения не было подвисшего состояния UI
+                    OnSystemSleep();
+                }
+                else if (ev == PBT_APMRESUMESUSPEND || ev == PBT_APMRESUMEAUTOMATIC)
+                {
+                    // Система проснулась — восстанавливаем UI
+                    OnSystemWake();
+                }
+
+                return IntPtr.Zero;
+            }
+
+            // ── USB Hotplug ───────────────────────────────────────────────
             if (msg != WM_DEVICECHANGE) return IntPtr.Zero;
 
-            int ev = wParam.ToInt32();
-            if (ev != DBT_DEVICEARRIVAL && ev != DBT_DEVICEREMOVECOMPLETE)
+            int devEv = wParam.ToInt32();
+            if (devEv != DBT_DEVICEARRIVAL && devEv != DBT_DEVICEREMOVECOMPLETE)
                 return IntPtr.Zero;
 
             if (lParam == IntPtr.Zero) return IntPtr.Zero;
@@ -255,7 +276,7 @@ namespace CleanupTemp_Pro
             if ((vol.dbcv_flags & DBTF_MEDIA) != 0)       return IntPtr.Zero;
             if ((vol.dbcv_flags & DBTF_NET)   != 0)       return IntPtr.Zero;
 
-            bool arrival = (ev == DBT_DEVICEARRIVAL);
+            bool arrival = (devEv == DBT_DEVICEARRIVAL);
             for (int i = 0; i < 26; i++)
                 if ((vol.dbcv_unitmask & (1 << i)) != 0)
                     OnUsbDriveChanged((char)('A' + i), arrival);
@@ -263,11 +284,70 @@ namespace CleanupTemp_Pro
             return IntPtr.Zero;
         }
 
+        /// <summary>
+        /// Вызывается когда система уходит в сон.
+        /// Отменяем текущий токен — это корректно прервёт Task.Run.
+        /// </summary>
+        private void OnSystemSleep()
+        {
+            if (_isRunning)
+            {
+                _wasInterruptedBySleep = true;
+                _cts?.Cancel();
+            }
+        }
+
+        /// <summary>
+        /// Вызывается после пробуждения из сна.
+        /// Гарантируем что UI в корректном состоянии — кнопки разблокированы,
+        /// статус сброшен, никакой "висящей" операции нет.
+        /// </summary>
+        private void OnSystemWake()
+        {
+            // Небольшая задержка — дать Windows полностью проснуться
+            // прежде чем трогать UI и диски
+            var wakeTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
+            wakeTimer.Tick += (_, _) =>
+            {
+                wakeTimer.Stop();
+
+                // Проверяем флаг прерывания — _isRunning мог уже быть сброшен
+                // в блоке finally Task.Run к этому моменту
+                if (_wasInterruptedBySleep)
+                {
+                    _wasInterruptedBySleep = false;
+                    // На случай если Task.Run ещё не успел завершить finally
+                    _isRunning = false;
+                    long freed = _cleanedBytes;
+                    _cleanedBytes    = 0;
+                    _totalFoundBytes = 0;
+                    _statTemp = _statBrowser = _statRecycle = 0;
+                    StatTempFiles.Text    = "0";
+                    StatBrowserFiles.Text = "0";
+                    StatRecycleBin.Text   = "0";
+                    TotalSizeText.Text    = "0 МБ";
+                    FileCountText.Text    = "0 файлов";
+                    SetUiRunning(false, false);
+                    SetProgress(0, "Операция прервана — система ушла в сон");
+                    SetStatus("⏸ Прервано (сон ПК) — нажмите «Сканировать» снова", StatusKind.Stopped);
+                    ListCountLabel.Text = freed > 0 ? $"Успело освободиться: {SizeHelper.Format(freed)}" : "";
+                }
+                else
+                {
+                    // Операция не шла — просто обновляем статус
+                    SetStatus("Готов к работе", StatusKind.Ready);
+                }
+
+                // В любом случае обновляем инфо о дисках — после сна они могут измениться
+                LoadDiskInfo();
+            };
+            wakeTimer.Start();
+        }
+
         private void OnUsbDriveChanged(char letter, bool arrived)
         {
             if (arrived)
             {
-                // Пауза 700 мс — Windows монтирует том не мгновенно
                 var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
                 t.Tick += (_, _) =>
                 {
@@ -332,14 +412,12 @@ namespace CleanupTemp_Pro
             FilesPanel.Visibility = Visibility.Visible;
             HistoryPanel.Visibility = Visibility.Collapsed;
 
-            // Подсвечиваем активную вкладку "Файлы"
-            TabFilesHeader.Background = new SolidColorBrush(Color.FromRgb(26, 42, 74)); // #1A2A4A
-            TabFilesText.Foreground = new SolidColorBrush(Color.FromRgb(74, 158, 255)); // #4A9EFF
+            TabFilesHeader.Background = new SolidColorBrush(Color.FromRgb(26, 42, 74));
+            TabFilesText.Foreground = new SolidColorBrush(Color.FromRgb(74, 158, 255));
             TabFilesText.FontWeight = FontWeights.Bold;
 
-            // Гасим неактивную вкладку "История"
             TabHistoryHeader.Background = Brushes.Transparent;
-            TabHistoryText.Foreground = new SolidColorBrush(Color.FromRgb(136, 136, 187)); // #8888BB
+            TabHistoryText.Foreground = new SolidColorBrush(Color.FromRgb(136, 136, 187));
             TabHistoryText.FontWeight = FontWeights.Normal;
         }
 
@@ -348,14 +426,12 @@ namespace CleanupTemp_Pro
             FilesPanel.Visibility = Visibility.Collapsed;
             HistoryPanel.Visibility = Visibility.Visible;
 
-            // Подсвечиваем активную вкладку "История"
-            TabHistoryHeader.Background = new SolidColorBrush(Color.FromRgb(26, 42, 74)); // #1A2A4A
-            TabHistoryText.Foreground = new SolidColorBrush(Color.FromRgb(74, 158, 255)); // #4A9EFF
+            TabHistoryHeader.Background = new SolidColorBrush(Color.FromRgb(26, 42, 74));
+            TabHistoryText.Foreground = new SolidColorBrush(Color.FromRgb(74, 158, 255));
             TabHistoryText.FontWeight = FontWeights.Bold;
 
-            // Гасим неактивную вкладку "Файлы"
             TabFilesHeader.Background = Brushes.Transparent;
-            TabFilesText.Foreground = new SolidColorBrush(Color.FromRgb(136, 136, 187)); // #8888BB
+            TabFilesText.Foreground = new SolidColorBrush(Color.FromRgb(136, 136, 187));
             TabFilesText.FontWeight = FontWeights.Normal;
         }
 
@@ -399,7 +475,7 @@ namespace CleanupTemp_Pro
             _pulseTimer.Start();
         }
 
-        // ── DISK INFO — все диски динамически ────────────────────────────
+        // ── DISK INFO ────────────────────────────────────────────────────
         private void LoadDiskInfo()
         {
             try
@@ -428,7 +504,6 @@ namespace CleanupTemp_Pro
                             : letter.StartsWith("C", StringComparison.OrdinalIgnoreCase) ? "🖥️"
                             : "💿";
 
-                        // Цвет бара зависит от заполненности
                         Color barC1, barC2;
                         if (pct >= 0.9)      { barC1 = Color.FromRgb(0xFF,0x3D,0x00); barC2 = Color.FromRgb(0xCC,0x00,0x44); }
                         else if (pct >= 0.75){ barC1 = Color.FromRgb(0xFF,0x8C,0x00); barC2 = Color.FromRgb(0xFF,0xA5,0x00); }
@@ -453,7 +528,6 @@ namespace CleanupTemp_Pro
 
                         var card = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
 
-                        // Заголовок: иконка + название | процент
                         var header = new Grid { Margin = new Thickness(0, 0, 0, 2) };
                         header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -492,7 +566,6 @@ namespace CleanupTemp_Pro
                         header.Children.Add(pctBlock);
                         card.Children.Add(header);
 
-                        // Использовано / Всего
                         card.Children.Add(new TextBlock
                         {
                             Text       = $"{SizeHelper.Format(used)} / {SizeHelper.Format(drv.TotalSize)}",
@@ -505,7 +578,6 @@ namespace CleanupTemp_Pro
                         card.Children.Add(barContainer);
                         DisksPanel.Items.Add(card);
 
-                        // Анимация бара
                         var capturedBar  = bar;
                         var capturedCont = barContainer;
                         double captPct   = pct;
@@ -522,7 +594,6 @@ namespace CleanupTemp_Pro
             }
             catch { }
         }
-
 
         // ── STATUS ────────────────────────────────────────────────────────
         enum StatusKind { Ready, Scanning, Cleaning, Found, Done, Stopped, Error }
@@ -556,24 +627,20 @@ namespace CleanupTemp_Pro
                 });
         }
 
-        // ── УПРАВЛЕНИЕ СОСТОЯНИЕМ КНОПОК-BORDER ──────────────────────────
+        // ── УПРАВЛЕНИЕ СОСТОЯНИЕМ КНОПОК ──────────────────────────────────
         private void SetUiRunning(bool running, bool hasFiles = false)
         {
             _canStop  = running;
             _canClean = !running && hasFiles;
 
-            // Scan: недоступна во время работы
             ScanBtnBorder.Opacity   = running ? 0.4 : 1.0;
             ScanBtnBorder.IsEnabled = !running;
 
-            // Clean: недоступна пока нет файлов или идёт работа
             CleanBtnBorder.Opacity   = _canClean ? 1.0 : 0.5;
             CleanBtnBorder.IsEnabled = _canClean;
 
-            // Stop: только во время работы
             StopBtnBorder.Opacity   = running ? 1.0 : 0.4;
             StopBtnBorder.IsEnabled = running;
-
         }
 
         // ── ОБРАБОТЧИКИ BORDER-КНОПОК ────────────────────────────────────
@@ -630,7 +697,6 @@ namespace CleanupTemp_Pro
         private void StopBorder_Click(object sender, MouseButtonEventArgs e)
         {
             if (!StopBtnBorder.IsEnabled) return;
-            // Только отменяем токен — finally в Scan/Clean сам приведёт UI в порядок
             _cts?.Cancel();
             SetStatus("Остановка...", StatusKind.Stopped);
         }
@@ -677,6 +743,98 @@ namespace CleanupTemp_Pro
         }
 
         // ═══════════════════════════════════════
+        //  WINDOWS UPDATE SERVICE — стоп/старт
+        // ═══════════════════════════════════════
+
+        /// <summary>
+        /// Проверяет, идёт ли прямо сейчас загрузка обновлений Windows.
+        /// Признак: служба wuauserv запущена И в папке есть файлы .esd/.cab без .psf (неполные).
+        /// </summary>
+        private static bool IsWindowsUpdateActive()
+        {
+            try
+            {
+                using var svc = new ServiceController("wuauserv");
+                if (svc.Status != ServiceControllerStatus.Running) return false;
+
+                string dir = @"C:\Windows\SoftwareDistribution\Download";
+                if (!Directory.Exists(dir)) return false;
+
+                // Ищем частично скачанные файлы — признак активной загрузки
+                var partialFiles = Directory.EnumerateFiles(dir, "*.esd", SearchOption.AllDirectories)
+                    .Concat(Directory.EnumerateFiles(dir, "*.cab", SearchOption.AllDirectories))
+                    .Take(5)
+                    .ToList();
+
+                return partialFiles.Count > 0;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// Останавливает службу Windows Update (wuauserv) и BITS.
+        /// Возвращает true если службы были остановлены успешно.
+        /// wasRunning = true если wuauserv была запущена до остановки.
+        /// </summary>
+        private static bool StopWindowsUpdateService(out bool wasRunning)
+        {
+            wasRunning = false;
+            try
+            {
+                // Сначала останавливаем BITS (Background Intelligent Transfer) — он держит файлы
+                try
+                {
+                    using var bits = new ServiceController("BITS");
+                    if (bits.Status == ServiceControllerStatus.Running)
+                    {
+                        bits.Stop();
+                        bits.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(15));
+                    }
+                }
+                catch { /* BITS мог быть уже остановлен */ }
+
+                // Затем wuauserv
+                using var svc = new ServiceController("wuauserv");
+                wasRunning = svc.Status == ServiceControllerStatus.Running
+                          || svc.Status == ServiceControllerStatus.StartPending;
+
+                if (svc.Status != ServiceControllerStatus.Stopped &&
+                    svc.Status != ServiceControllerStatus.StopPending)
+                {
+                    svc.Stop();
+                    svc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(25));
+                }
+
+                // Даём файловой системе пару секунд отпустить хэндлы
+                Thread.Sleep(1500);
+                return true;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// Запускает службу Windows Update обратно (если она была запущена).
+        /// </summary>
+        private static void StartWindowsUpdateService()
+        {
+            try
+            {
+                using var svc = new ServiceController("wuauserv");
+                if (svc.Status == ServiceControllerStatus.Stopped)
+                    svc.Start();
+            }
+            catch { }
+
+            try
+            {
+                using var bits = new ServiceController("BITS");
+                if (bits.Status == ServiceControllerStatus.Stopped)
+                    bits.Start();
+            }
+            catch { }
+        }
+
+        // ═══════════════════════════════════════
         //  SCAN
         // ═══════════════════════════════════════
         private async void ScanBtn_Execute()
@@ -684,7 +842,6 @@ namespace CleanupTemp_Pro
             if (_isRunning) return;
             _fileItems.Clear();
             _totalFoundBytes = 0;
-            // Сбрасываем счётчики статистики перед каждым новым сканированием
             _statTemp = _statBrowser = _statRecycle = 0;
             StatTempFiles.Text = StatBrowserFiles.Text = StatRecycleBin.Text = "0";
             StatCleaned.Text = "0";
@@ -694,8 +851,8 @@ namespace CleanupTemp_Pro
             if (_showingHistory) SwitchTab(false);
 
             _isRunning = true;
-            // Dispose старого CTS перед созданием нового
-            _cts?.Dispose();
+            _cts?.Cancel();   // сначала отменяем (если старый токен ещё жив)
+            _cts?.Dispose();  // потом освобождаем
             _cts = new CancellationTokenSource();
             SetUiRunning(true);
             SetStatus("Сканирование...", StatusKind.Scanning);
@@ -704,6 +861,14 @@ namespace CleanupTemp_Pro
             var paths      = GetScanPaths();
             bool doRecycle = ChkRecycleBin?.IsChecked == true;
             var token      = _cts.Token;
+
+            // ── НОВОЕ: предупреждение если WU активна ──
+            bool wuActive = false;
+            await Task.Run(() => { wuActive = IsWindowsUpdateActive(); });
+            if (wuActive && ChkWinTemp?.IsChecked == true)
+            {
+                SetStatus("⚠ Обнаружена активная загрузка обновлений Windows", StatusKind.Error);
+            }
 
             try
             {
@@ -738,7 +903,6 @@ namespace CleanupTemp_Pro
                 }
                 else if (_fileItems.Count > 0)
                 {
-                    // ИСПРАВЛЕНИЕ #3: подсказка о браузерах, если они запущены
                     bool browsersOpen = ChkBrowserCache?.IsChecked == true &&
                         new[] { "chrome", "msedge", "firefox", "brave", "opera", "browser", "vivaldi" }
                             .Any(n => Process.GetProcessesByName(n).Length > 0);
@@ -759,22 +923,24 @@ namespace CleanupTemp_Pro
         {
             try
             {
-                // "Мусор в корне X:" — сканируем только по расширениям, без рекурсии
                 bool isRootJunk = cat.StartsWith("Мусор в корне", StringComparison.OrdinalIgnoreCase);
-
-                // Для корзины ($RECYCLE.BIN) — файлы помечены System+Hidden, читаем всё.
-                // Для остальных — пропускаем только System (НЕ Hidden!).
-                // ВАЖНО: по умолчанию .NET добавляет Hidden в AttributesToSkip автоматически —
-                // из-за этого кэши браузеров, AppData и корзина D: не находились вообще!
                 bool isRecycleBinDir = dir.IndexOf("$RECYCLE.BIN", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                // ── НОВОЕ: для SoftwareDistribution ставим таймаут 30 сек ──
+                bool isSoftwareDist = dir.IndexOf("SoftwareDistribution", StringComparison.OrdinalIgnoreCase) >= 0;
+                using var timeoutCts = isSoftwareDist
+                    ? new CancellationTokenSource(TimeSpan.FromSeconds(30))
+                    : new CancellationTokenSource();
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token);
+                var effectiveToken = linkedCts.Token;
 
                 var opts = new EnumerationOptions
                 {
                     IgnoreInaccessible    = true,
                     RecurseSubdirectories = !isRootJunk,
                     AttributesToSkip      = isRecycleBinDir
-                        ? FileAttributes.None   // корзина: читаем всё включая System+Hidden
-                        : FileAttributes.System // иначе: пропускаем только системные
+                        ? FileAttributes.None
+                        : FileAttributes.System
                 };
 
                 bool isBrowser = cat.Contains("Chrome") || cat.Contains("Edge") ||
@@ -814,10 +980,9 @@ namespace CleanupTemp_Pro
 
                 foreach (var file in Directory.EnumerateFiles(dir, "*", opts))
                 {
-                    if (token.IsCancellationRequested) break;
+                    if (effectiveToken.IsCancellationRequested) break;
                     try
                     {
-                        // Для корня диска — только мусорные расширения и имена
                         if (isRootJunk)
                         {
                             string ext  = System.IO.Path.GetExtension(file);
@@ -861,7 +1026,6 @@ namespace CleanupTemp_Pro
                     long sz = info.i64Size, cnt = info.i64NumItems;
                     Dispatcher.Invoke(() =>
                     {
-                        // Уже на UI-потоке
                         _totalFoundBytes += sz;
                         _statRecycle     += (int)cnt;
                         _fileItems.Add(new FileItem { Icon = "🗑️",
@@ -936,9 +1100,7 @@ namespace CleanupTemp_Pro
 
             if (ChkDnsCache?.IsChecked == true)
             {
-                // INetCache — кэш IE и Edge Legacy (не дублируется с Chromium Edge из BrowserCache)
                 L.Add((System.IO.Path.Combine(local, @"Microsoft\Windows\INetCache"), "IE/Edge Legacy Cache", "🔗"));
-                // WebCache — база данных истории/кэша Edge Legacy
                 string webCachePath = System.IO.Path.Combine(local, @"Microsoft\Windows\WebCache");
                 if (Directory.Exists(webCachePath))
                     L.Add((webCachePath, "Edge Legacy WebCache", "🔗"));
@@ -948,8 +1110,6 @@ namespace CleanupTemp_Pro
             {
                 L.Add((System.IO.Path.Combine(local, @"Microsoft\Office\16.0\OfficeFileCache"), "Office кэш", "📎"));
                 L.Add((System.IO.Path.Combine(local, @"Microsoft\Office\16.0\OfficeFileCache\0"), "Office FileCache", "📎"));
-                // UnsavedFiles намеренно НЕ включаем — там могут быть несохранённые документы пользователя!
-                // L.Add((System.IO.Path.Combine(local, @"Microsoft\Office\UnsavedFiles"), "Office UnsavedFiles", "📎"));
             }
 
             if (ChkExternalDrives?.IsChecked == true)
@@ -958,8 +1118,6 @@ namespace CleanupTemp_Pro
             return L;
         }
 
-        // ── ВНЕШНИЕ ДИСКИ: D:, E:, флешки и т.д. ─────────────────────────
-        // Расширенный метод: находит ВСЕ реальные источники мусора на любом диске
         private static List<(string, string, string)> GetExternalDrivePaths()
         {
             var result = new List<(string, string, string)>();
@@ -968,18 +1126,16 @@ namespace CleanupTemp_Pro
             {
                 try
                 {
-                    // Пропускаем C: — покрыт основными категориями
                     if (drive.Name.StartsWith("C", StringComparison.OrdinalIgnoreCase))
                         continue;
 
-                    // Только готовые Fixed (HDD/SSD) и Removable (флешки/SD)
                     if (!drive.IsReady) continue;
                     if (drive.DriveType != DriveType.Fixed &&
                         drive.DriveType != DriveType.Removable)
                         continue;
 
-                    string root        = drive.Name;   // "D:\\"
-                    string letter      = root.TrimEnd('\\');  // "D:"
+                    string root        = drive.Name;
+                    string letter      = root.TrimEnd('\\');
                     string icon        = drive.DriveType == DriveType.Removable ? "💾" : "🖥️";
                     string label       = string.IsNullOrWhiteSpace(drive.VolumeLabel)
                                         ? letter : $"{drive.VolumeLabel} ({letter})";
@@ -990,23 +1146,15 @@ namespace CleanupTemp_Pro
                             result.Add((path, cat, ic ?? icon));
                     }
 
-                    // ── 1. $RECYCLE.BIN ─────────────────────────────────────────
-                    // Содержит реальные удалённые файлы, ожидающие очистки корзины
                     TryAdd(System.IO.Path.Combine(root, "$RECYCLE.BIN"), $"Корзина {label}", "🗑️");
 
-                    // ── 2. Стандартные Temp-папки в корне ───────────────────────
                     foreach (var n in new[] { "Temp", "temp", "tmp", "Tmp", "TEMP", "_Temp", "$Temp", "TempFiles" })
                         TryAdd(System.IO.Path.Combine(root, n), $"Temp {label}");
 
-                    // ── 3. Windows на другом диске (встречается у некоторых) ────
-                    TryAdd(System.IO.Path.Combine(root, @"Windows\Temp"),
-                           $"Windows Temp {label}");
-                    TryAdd(System.IO.Path.Combine(root, @"Windows\SoftwareDistribution\Download"),
-                           $"WU кэш {label}");
-                    TryAdd(System.IO.Path.Combine(root, @"Windows\Prefetch"),
-                           $"Prefetch {label}");
+                    TryAdd(System.IO.Path.Combine(root, @"Windows\Temp"), $"Windows Temp {label}");
+                    TryAdd(System.IO.Path.Combine(root, @"Windows\SoftwareDistribution\Download"), $"WU кэш {label}");
+                    TryAdd(System.IO.Path.Combine(root, @"Windows\Prefetch"), $"Prefetch {label}");
 
-                    // ── 4. Users на другом диске ────────────────────────────────
                     string usersRoot = System.IO.Path.Combine(root, "Users");
                     if (Directory.Exists(usersRoot))
                     {
@@ -1022,31 +1170,17 @@ namespace CleanupTemp_Pro
                             string localData = System.IO.Path.Combine(userDir, @"AppData\Local");
                             string roamData  = System.IO.Path.Combine(userDir, @"AppData\Roaming");
 
-                            // Temp пользователя
-                            TryAdd(System.IO.Path.Combine(localData, "Temp"),
-                                   $"Temp пользователя {label}");
+                            TryAdd(System.IO.Path.Combine(localData, "Temp"), $"Temp пользователя {label}");
+                            TryAdd(System.IO.Path.Combine(localData, @"Microsoft\Windows\INetCache"), $"IE/Edge Cache ({letter})", "🔗");
+                            TryAdd(System.IO.Path.Combine(localData, @"Microsoft\Windows\Explorer"), $"Thumbnails {label}", "🖼️");
+                            TryAdd(System.IO.Path.Combine(localData, @"Microsoft\Office\16.0\OfficeFileCache"), $"Office кэш ({letter})", "📎");
 
-                            // IE/Edge INetCache
-                            TryAdd(System.IO.Path.Combine(localData, @"Microsoft\Windows\INetCache"),
-                                   $"IE/Edge Cache ({letter})", "🔗");
-
-                            // Thumbnails
-                            TryAdd(System.IO.Path.Combine(localData, @"Microsoft\Windows\Explorer"),
-                                   $"Thumbnails {label}", "🖼️");
-
-                            // Office
-                            TryAdd(System.IO.Path.Combine(localData, @"Microsoft\Office\16.0\OfficeFileCache"),
-                                   $"Office кэш ({letter})", "📎");
-
-                            // Chrome
                             foreach (var cp in GetChromeProfiles(localData))
                                 AddBrowserCachePaths(result, cp, $"Chrome ({letter})");
 
-                            // Edge
                             foreach (var ep in GetChromiumProfiles(localData, @"Microsoft\Edge\User Data"))
                                 AddBrowserCachePaths(result, ep, $"Edge ({letter})");
 
-                            // Firefox
                             string ffProfiles = System.IO.Path.Combine(localData, @"Mozilla\Firefox\Profiles");
                             if (Directory.Exists(ffProfiles))
                                 foreach (var d in Directory.GetDirectories(ffProfiles))
@@ -1055,33 +1189,23 @@ namespace CleanupTemp_Pro
                                     TryAdd(System.IO.Path.Combine(d, "startupCache"), $"Firefox Startup ({letter})", "🦊");
                                 }
 
-                            // Brave
                             foreach (var bp in GetChromiumProfiles(localData, @"BraveSoftware\Brave-Browser\User Data"))
                                 AddBrowserCachePaths(result, bp, $"Brave ({letter})");
 
-                            // Yandex
                             foreach (var yp in GetChromiumProfiles(localData, @"Yandex\YandexBrowser\User Data"))
                                 AddBrowserCachePaths(result, yp, $"Яндекс ({letter})");
 
-                            // Opera
                             foreach (var op in GetChromiumProfiles(localData, @"Opera Software\Opera Stable"))
                                 AddBrowserCachePaths(result, op, $"Opera ({letter})");
 
-                            // Teams, Slack кэш
-                            TryAdd(System.IO.Path.Combine(roamData,  @"Microsoft\Teams\Service Worker\CacheStorage"),
-                                   $"Teams кэш ({letter})", "💬");
-                            TryAdd(System.IO.Path.Combine(localData, @"slack\Cache"),
-                                   $"Slack кэш ({letter})", "💬");
+                            TryAdd(System.IO.Path.Combine(roamData,  @"Microsoft\Teams\Service Worker\CacheStorage"), $"Teams кэш ({letter})", "💬");
+                            TryAdd(System.IO.Path.Combine(localData, @"slack\Cache"), $"Slack кэш ({letter})", "💬");
                         }
                     }
 
-                    // ── 5. Корень диска — мусорные файлы верхнего уровня ────────
-                    // Сканируем сам корень на *.tmp, *.bak, ~* без рекурсии в подпапки
-                    // Это реализовано в ScanDir через EnumerationOptions,
-                    // поэтому добавляем корень диска с ограниченным сканированием
                     TryAdd(root, $"Мусор в корне {label}");
                 }
-                catch { /* нет доступа — пропускаем */ }
+                catch { }
             }
 
             return result;
@@ -1107,7 +1231,6 @@ namespace CleanupTemp_Pro
             }
             else
             {
-                // Opera One и др. хранят кэш прямо в корне
                 yield return root;
             }
         }
@@ -1126,7 +1249,6 @@ namespace CleanupTemp_Pro
                 if (Directory.Exists(full))
                     L.Add((full, $"{browserName} кэш", "🌐"));
             }
-            // Network Cache отдельно из-за бэкслюшес
             string netCache = System.IO.Path.Combine(profilePath, "Network", "Cache");
             if (Directory.Exists(netCache))
                 L.Add((netCache, $"{browserName} Network Cache", "🌐"));
@@ -1152,7 +1274,30 @@ namespace CleanupTemp_Pro
             dlg.ShowDialog();
             if (!dlg.Result) return;
 
-            // ИСПРАВЛЕНИЕ #2: предупреждаем об открытых браузерах перед очисткой кэша
+            // ── НОВОЕ: предупреждение если WU скачивает обновления ──
+            bool hasWuFiles = _fileItems.Any(x => x.Category == "Windows Update кэш"
+                                               || x.Category.StartsWith("WU кэш"));
+            if (hasWuFiles)
+            {
+                bool wuActive = false;
+                await Task.Run(() => { wuActive = IsWindowsUpdateActive(); });
+
+                if (wuActive)
+                {
+                    var wuDlg = new CustomDialog(
+                        "Обновления Windows загружаются!",
+                        "Прямо сейчас Windows скачивает обновления.\n\n" +
+                        "Программа остановит службу обновлений, очистит кэш и запустит её снова.\n" +
+                        "Обновления будут скачаны заново при следующем запуске Windows Update.\n\n" +
+                        "Продолжить?",
+                        DialogKind.Warning,
+                        showCancel: true);
+                    wuDlg.ShowDialog();
+                    if (!wuDlg.Result) return;
+                }
+            }
+
+            // Предупреждение об открытых браузерах
             if (ChkBrowserCache?.IsChecked == true)
             {
                 var browserProcesses = new Dictionary<string, string>
@@ -1184,11 +1329,11 @@ namespace CleanupTemp_Pro
             }
 
             _isRunning = true;
-            // Dispose старого CTS перед созданием нового
-            _cts?.Dispose();
+            _cts?.Cancel();   // сначала отменяем
+            _cts?.Dispose();  // потом освобождаем
             _cts = new CancellationTokenSource();
             _cleanedBytes = 0;
-            StatCleaned.Text = "0";  // сброс счётчика очищенного на UI
+            StatCleaned.Text = "0";
             SetUiRunning(true);
             SetStatus("Очистка...", StatusKind.Cleaning);
             SetProgress(0, "Начинаю очистку...");
@@ -1196,11 +1341,14 @@ namespace CleanupTemp_Pro
             var snapshot   = _fileItems.ToList();
             bool doRecycle = snapshot.Any(x => x.Category == "Корзина");
             var regular    = snapshot.Where(x => x.Category != "Корзина").ToList();
-            // Получаем пути ДО Task.Run — они читают UI-элементы (чекбоксы)
             var cleanDirs  = GetScanPaths().Select(p => p.Item1).Distinct().ToList();
 
             int done = 0, deleted = 0, skipped = 0;
             var token = _cts.Token;
+
+            // ── Определяем, есть ли среди файлов что-то из SoftwareDistribution ──
+            bool needWuStop = regular.Any(x =>
+                x.Path.IndexOf("SoftwareDistribution", StringComparison.OrdinalIgnoreCase) >= 0);
 
             try
             {
@@ -1208,41 +1356,77 @@ namespace CleanupTemp_Pro
                 {
                     var sw = Stopwatch.StartNew();
 
-                    foreach (var item in regular)
+                    // ── НОВОЕ: останавливаем Windows Update если нужно ──
+                    bool wuWasRunning = false;
+                    if (needWuStop)
                     {
-                        if (token.IsCancellationRequested) break;
-                        try
+                        Dispatcher.Invoke(() =>
                         {
-                            if (File.Exists(item.Path))
+                            SetProgress(1, "Останавливаю службу Windows Update...");
+                            SetStatus("Останавливаю службу обновлений...", StatusKind.Cleaning);
+                        });
+
+                        bool stopped = StopWindowsUpdateService(out wuWasRunning);
+
+                        Dispatcher.Invoke(() =>
+                        {
+                            if (stopped)
+                                SetProgress(3, "Служба остановлена. Начинаю очистку...");
+                            else
+                                SetProgress(3, "Не удалось остановить службу — пробую удалить...");
+                        });
+                    }
+
+                    try
+                    {
+                        foreach (var item in regular)
+                        {
+                            if (token.IsCancellationRequested) break;
+                            try
                             {
-                                var attr = File.GetAttributes(item.Path);
-                                if ((attr & (FileAttributes.ReadOnly | FileAttributes.System)) != 0)
-                                    File.SetAttributes(item.Path, FileAttributes.Normal);
-                                File.Delete(item.Path);
-                                Interlocked.Add(ref _cleanedBytes, item.SizeBytes);
-                                Interlocked.Increment(ref deleted);
+                                if (File.Exists(item.Path))
+                                {
+                                    var attr = File.GetAttributes(item.Path);
+                                    if ((attr & (FileAttributes.ReadOnly | FileAttributes.System)) != 0)
+                                        File.SetAttributes(item.Path, FileAttributes.Normal);
+                                    File.Delete(item.Path);
+                                    Interlocked.Add(ref _cleanedBytes, item.SizeBytes);
+                                    Interlocked.Increment(ref deleted);
+                                }
+                            }
+                            catch { Interlocked.Increment(ref skipped); }
+
+                            done++;
+                            if (sw.ElapsedMilliseconds >= 200 || done == regular.Count)
+                            {
+                                sw.Restart();
+                                int d2 = done; long c2 = _cleanedBytes;
+                                var deletedPaths = new HashSet<string>(
+                                    regular.Where(x => !File.Exists(x.Path)).Select(x => x.Path));
+                                Dispatcher.Invoke(() =>
+                                {
+                                    var toRemove = _fileItems
+                                        .Where(x => x.Category != "Корзина" && deletedPaths.Contains(x.Path))
+                                        .ToList();
+                                    SetProgress(regular.Count > 0 ? d2 * 100.0 / regular.Count : 100,
+                                        $"Удалено {d2} / {regular.Count} • {SizeHelper.Format(c2)}");
+                                    StatCleaned.Text = SizeHelper.Format(c2);
+                                    foreach (var r in toRemove) _fileItems.Remove(r);
+                                }, DispatcherPriority.Background);
                             }
                         }
-                        catch { Interlocked.Increment(ref skipped); }
-
-                        done++;
-                        if (sw.ElapsedMilliseconds >= 200 || done == regular.Count)
+                    }
+                    finally
+                    {
+                        // ── НОВОЕ: всегда запускаем службу обратно, даже если была ошибка ──
+                        if (needWuStop && wuWasRunning)
                         {
-                            sw.Restart();
-                            int d2 = done; long c2 = _cleanedBytes;
-                            // File.Exists на фоновом потоке — правильно, не блокируем UI
-                            var deletedPaths = new HashSet<string>(
-                                regular.Where(x => !File.Exists(x.Path)).Select(x => x.Path));
                             Dispatcher.Invoke(() =>
                             {
-                                var toRemove = _fileItems
-                                    .Where(x => x.Category != "Корзина" && deletedPaths.Contains(x.Path))
-                                    .ToList();
-                                SetProgress(regular.Count > 0 ? d2 * 100.0 / regular.Count : 100,
-                                    $"Удалено {d2} / {regular.Count} • {SizeHelper.Format(c2)}");
-                                StatCleaned.Text = SizeHelper.Format(c2);
-                                foreach (var r in toRemove) _fileItems.Remove(r);
-                            }, DispatcherPriority.Background);
+                                SetProgress(97, "Запускаю службу Windows Update...");
+                                SetStatus("Восстанавливаю службу обновлений...", StatusKind.Cleaning);
+                            });
+                            StartWindowsUpdateService();
                         }
                     }
 
@@ -1255,7 +1439,7 @@ namespace CleanupTemp_Pro
                             SHQueryRecycleBin(null, ref rbi);
                             SHEmptyRecycleBin(IntPtr.Zero, null, 0x00000001 | 0x00000002 | 0x00000004);
                             Interlocked.Add(ref _cleanedBytes, rbi.i64Size);
-                            long c3 = _cleanedBytes; // снапшот до Dispatcher
+                            long c3 = _cleanedBytes;
                             Dispatcher.Invoke(() =>
                             {
                                 var rb = _fileItems.FirstOrDefault(x => x.Category == "Корзина");
@@ -1279,8 +1463,6 @@ namespace CleanupTemp_Pro
                 _totalFoundBytes = 0;
                 long freed = _cleanedBytes;
                 _cleanedBytes = 0;
-                // ИСПРАВЛЕНИЕ #1: сбрасываем счётчики статистики после очистки,
-                // иначе при повторном сканировании они суммируются со старыми значениями
                 _statTemp    = 0;
                 _statBrowser = 0;
                 _statRecycle = 0;
@@ -1387,7 +1569,7 @@ namespace CleanupTemp_Pro
                 ? WindowState.Normal
                 : WindowState.Maximized;
 
-        // ── ЭФФЕКТЫ ДЛЯ ВКЛАДОК (МЕТОДЫ ПОДСВЕТКИ) ────────────────────────
+        // ── ЭФФЕКТЫ ДЛЯ ВКЛАДОК ────────────────────────────────────────────
         private void TabHeader_MouseEnter(object sender, MouseEventArgs e)
         {
             if (sender is Border header)
@@ -1423,5 +1605,5 @@ namespace CleanupTemp_Pro
                 header.Effect = null;
             }
         }
-    } 
-} 
+    }
+}
