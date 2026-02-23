@@ -1,8 +1,8 @@
 [Setup]
 AppId={{7F49CBC0-9540-455B-B05E-78FD14DFCE6B}}
 AppName=Cleanup Temp Pro
-AppVersion=3.0.1
-AppVerName=Cleanup Temp Pro 3.0.1
+AppVersion=3.1.0
+AppVerName=Cleanup Temp Pro 3.1.0
 AppPublisher=Виталий Николаевич (vitalikkontr)
 AppPublisherURL=https://github.com/vitalikkontr/CleanupTemp-Pro
 AppSupportURL=https://github.com/vitalikkontr/CleanupTemp-Pro/issues
@@ -12,7 +12,7 @@ DefaultDirName={autopf}\Cleanup Temp Professional
 DefaultGroupName=Cleanup Temp
 DisableProgramGroupPage=yes
 OutputDir=C:\Release\Setup
-OutputBaseFilename=CleanupTemp-Professional-Setup-v3.0.1
+OutputBaseFilename=CleanupTemp-Professional-Setup-v3.1.0
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -46,7 +46,7 @@ Root: HKCU; Subkey: "Software\CleanupTempProfessional\Settings"; Flags: uninsdel
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "CleanupTemp"; ValueData: """{app}\CleanupTemp_Pro.exe"" /autostart"; Flags: uninsdeletevalue; Tasks: autostart
 
 [Run]
-Filename: "{app}\CleanupTemp_Pro.exe"; Description: "{cm:LaunchProgram,Cleanup Temp}"; Flags: nowait postinstall skipifsilent
+; Не запускаем здесь exe, запуск будет через ShellExec с правами администратора
 
 [UninstallDelete]
 Type: files; Name: "{app}\config.ini"
@@ -54,34 +54,42 @@ Type: files; Name: "{app}\*.log"
 Type: dirifempty; Name: "{app}"
 
 [Code]
-function InitializeSetup(): Boolean;
+const
+  AppMutexName = 'CleanupTempMutex';
+
+function IsAppRunning(): Boolean;
 begin
-  Result := True;
+  Result := CheckForMutexes(AppMutexName);
 end;
 
-procedure CurStepChanged(CurStep: TSetupStep);
-begin
-  if CurStep = ssPostInstall then
-  begin
-    // Здесь можно добавить дополнительные действия после установки
-  end;
-end;
-
-function InitializeUninstall(): Boolean;
+function CloseRunningApp(): Boolean;
 var
   ResultCode: Integer;
 begin
   Result := True;
-  // Закрываем приложение перед удалением
-  if CheckForMutexes('CleanupTempMutex') then
+  if IsAppRunning() then
   begin
-    if MsgBox('Приложение Cleanup Temp запущено. Закрыть его для продолжения?', mbConfirmation, MB_YESNO) = IDYES then
+    if MsgBox('Приложение CleanupTemp запущено. Закрыть его для продолжения?', mbConfirmation, MB_YESNO) = IDYES then
     begin
-      Exec('taskkill.exe', '/F /IM CleanupTemp_Pro.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      Exec('taskkill.exe', '/F /IM CleanupTemp.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     end
     else
-    begin
       Result := False;
-    end;
   end;
 end;
+
+function InitializeSetup(): Boolean;
+begin
+  Result := CloseRunningApp();
+end;
+
+function InitializeUninstall(): Boolean;
+begin
+  Result := CloseRunningApp();
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  // Не делаем ничего, автозапуск отключён
+end;
+

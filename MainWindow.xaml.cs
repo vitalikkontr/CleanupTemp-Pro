@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Diagnostics.Eventing.Reader;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -48,6 +49,23 @@ namespace CleanupTemp_Pro
         }
     }
 
+    /// <summary>
+    /// ObservableCollection с поддержкой AddRange.
+    /// Добавляет весь батч и стреляет ONE Reset-уведомление вместо тысяч Add-уведомлений.
+    /// ListView перерисовывается один раз на батч — счётчик обновляется мгновенно.
+    /// </summary>
+    public sealed class BulkObservableCollection<T> : ObservableCollection<T>
+    {
+        public void AddRange(IEnumerable<T> items)
+        {
+            foreach (var item in items)
+                Items.Add(item);   // Items — List<T> без уведомлений
+            // Одно Reset-уведомление на весь батч
+            OnCollectionChanged(new System.Collections.Specialized.NotifyCollectionChangedEventArgs(
+                System.Collections.Specialized.NotifyCollectionChangedAction.Reset));
+        }
+    }
+
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     struct SHQUERYRBINFO { public int cbSize; public long i64Size; public long i64NumItems; }
 
@@ -59,12 +77,12 @@ namespace CleanupTemp_Pro
         static extern int SHQueryRecycleBin(string? root, ref SHQUERYRBINFO info);
 
         private CancellationTokenSource? _cts;
-        private readonly ObservableCollection<FileItem>    _fileItems    = new();
-        private readonly ObservableCollection<HistoryItem> _historyItems = new();
+        private readonly BulkObservableCollection<FileItem> _fileItems    = new();
+        private readonly ObservableCollection<HistoryItem>  _historyItems = new();
 
         private long _totalFoundBytes;
         private long _cleanedBytes;
-        private bool _isRunning;
+        private volatile bool _isRunning;
         private bool _canClean;
         private bool _canStop;
         private int  _statTemp, _statBrowser, _statRecycle;
@@ -93,6 +111,25 @@ namespace CleanupTemp_Pro
             "UnsavedFiles",
         };
 
+        // Подпапки внутри Temp которые принадлежат активным приложениям —
+        // удалять их файлы нельзя, программы держат их в процессе работы.
+        private static readonly HashSet<string> _protectedTempSubfolders =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".net",           // .NET runtime cache
+            "Cloudflare WARP", "WARP",
+            "VBCSCompiler",   // Roslyn compiler (Visual Studio / MSBuild)
+            "MSBuild",        // MSBuild
+            "VSLogs",         // Visual Studio логи
+            "VisualStudio",   // Visual Studio временные файлы
+            "SquirrelTemp",   // Electron app installer
+            "nvidia",         // NVIDIA драйверы
+            "AMD",            // AMD драйверы
+            "7zS",            // 7-zip self-extract temp
+            "RarSFX",         // WinRAR self-extract temp
+            "wct",            // Windows Component Tools
+        };
+
         private static readonly HashSet<string> _junkExtensions =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -100,10 +137,50 @@ namespace CleanupTemp_Pro
             ".fts", ".ftg", ".wbk", ".xlk", ".~doc", ".~xls", ".~ppt", ".temp"
         };
 
+        // Расширения которые НИКОГДА не являются мусором в Temp —
+        // это рабочие файлы активных приложений и компонентов
+        private static readonly HashSet<string> _safeExtensionsInTemp =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".dll", ".exe", ".sys", ".pdb", ".xml", ".json", ".config",
+            ".ini", ".log", ".lock", ".pid", ".manifest", ".cat",
+            ".svclog", ".etl", ".diaglog",  // логи служб Windows и VS
+            ".msi", ".msp", ".cab",
+            ".ps1", ".bat", ".cmd",
+        };
+
         private static readonly HashSet<string> _junkFileNames =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "thumbs.db", "desktop.ini", "ehthumbs.db", "ehthumbs_vista.db", ".ds_store"
+            "thumbs.db", "ehthumbs.db", "ehthumbs_vista.db", ".ds_store"
+            // desktop.ini убран — это системный файл Windows, не мусор
+        };
+
+        // Файлы которые НЕЛЬЗЯ трогать даже если они лежат в папках кэша —
+        // это живые базы данных и журналы, заблокированные процессами.
+        private static readonly HashSet<string> _protectedFileNames =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            // Системные файлы Windows — никогда не удалять
+            "desktop.ini", "thumbs.db", "autorun.inf",
+            "WebCacheV01.dat", "WebCacheV24.dat",
+            "WebCacheV01.jfm", "WebCacheV24.jfm",
+            "V01tmp.log", "V24tmp.log",
+            // Chromium (Chrome/Edge/Opera/Brave/Vivaldi) — журналы кэша,
+            // пересоздаются браузером мгновенно после удаления
+            "journal.baj", "journal.log",
+            "index",        // индекс кэша Chromium
+            // Chrome/Edge lock-файлы
+            "lockfile", "LOCK", "LOG", "LOG.old",
+            // Firefox
+            "places.sqlite", "cookies.sqlite", "webappsstore.sqlite",
+        };
+
+        // Расширения живых БД — никогда не удалять
+        private static readonly HashSet<string> _protectedExtensions =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".dat", ".jfm", ".db-wal", ".db-shm", ".sqlite", ".sqlite-wal", ".sqlite-shm"
         };
 
         private static bool IsInProtectedFolder(string filePath)
@@ -111,9 +188,30 @@ namespace CleanupTemp_Pro
             var parts = filePath.Split(System.IO.Path.DirectorySeparatorChar,
                                        System.IO.Path.AltDirectorySeparatorChar);
             foreach (var part in parts)
-                if (_protectedFolderNames.Contains(part))
-                    return true;
+            {
+                if (_protectedFolderNames.Contains(part)) return true;
+                if (_protectedTempSubfolders.Contains(part)) return true;
+            }
             return false;
+        }
+
+        /// <summary>
+        /// Быстрая проверка заблокирован ли .tmp файл активным процессом.
+        /// Используем только для .tmp — FileStream.Open дорогая операция.
+        /// Возвращает true если файл занят (не надо показывать в списке).
+        /// </summary>
+        private static bool IsTmpFileLocked(string path)
+        {
+            try
+            {
+                using var fs = new FileStream(
+                    path, FileMode.Open, FileAccess.ReadWrite, FileShare.None,
+                    bufferSize: 1, useAsync: false);
+                return false; // открылся — свободен
+            }
+            catch (IOException)               { return true;  } // занят
+            catch (UnauthorizedAccessException) { return false; } // нет прав — не то же что занят
+            catch                              { return false; }
         }
 
         // ── НАСТРОЙКИ ────────────────────────────────────────────────────
@@ -406,6 +504,10 @@ namespace CleanupTemp_Pro
             catch { return null; }
         }
 
+        // ── КЕШИРОВАННЫЕ ОБЪЕКТЫ ──────────────────────────────────────────
+        private static readonly FontFamily _fontSemibold = new("Segoe UI Semibold");
+        private static readonly FontFamily _fontRegular  = new("Segoe UI");
+
         // ── ВКЛАДКИ ───────────────────────────────────────────────────────
         private void TabFiles_Click(object sender, MouseButtonEventArgs e)
         {
@@ -445,20 +547,20 @@ namespace CleanupTemp_Pro
             {
                 TabHistoryHeader.Background = new SolidColorBrush(Color.FromRgb(0x1A,0x2A,0x4A));
                 TabHistoryText.Foreground   = new SolidColorBrush(Color.FromRgb(0x4A,0x9E,0xFF));
-                TabHistoryText.FontFamily   = new FontFamily("Segoe UI Semibold");
+                TabHistoryText.FontFamily   = _fontSemibold;
                 TabFilesHeader.Background   = Brushes.Transparent;
                 TabFilesText.Foreground     = (Brush)FindResource("TextSecondaryBrush");
-                TabFilesText.FontFamily     = new FontFamily("Segoe UI");
+                TabFilesText.FontFamily     = _fontRegular;
                 ListCountLabel.Text         = $"{_historyItems.Count} записей";
             }
             else
             {
                 TabFilesHeader.Background   = new SolidColorBrush(Color.FromRgb(0x1A,0x2A,0x4A));
                 TabFilesText.Foreground     = new SolidColorBrush(Color.FromRgb(0x4A,0x9E,0xFF));
-                TabFilesText.FontFamily     = new FontFamily("Segoe UI Semibold");
+                TabFilesText.FontFamily     = _fontSemibold;
                 TabHistoryHeader.Background = Brushes.Transparent;
                 TabHistoryText.Foreground   = (Brush)FindResource("TextSecondaryBrush");
-                TabHistoryText.FontFamily   = new FontFamily("Segoe UI");
+                TabHistoryText.FontFamily   = _fontRegular;
                 ListCountLabel.Text         = _fileItems.Count > 0 ? $"{_fileItems.Count} объектов" : "";
             }
         }
@@ -543,7 +645,7 @@ namespace CleanupTemp_Pro
                         namePanel.Children.Add(new TextBlock
                         {
                             Text              = $"{letter}  {label}",
-                            FontFamily        = new FontFamily("Segoe UI Semibold"),
+                            FontFamily        = _fontSemibold,
                             FontSize          = 11,
                             Foreground        = new SolidColorBrush(Color.FromRgb(0xE8,0xE8,0xFF)),
                             VerticalAlignment = VerticalAlignment.Center
@@ -557,7 +659,7 @@ namespace CleanupTemp_Pro
                         var pctBlock = new TextBlock
                         {
                             Text              = $"{pct * 100:F0}%",
-                            FontFamily        = new FontFamily("Segoe UI Semibold"),
+                            FontFamily        = _fontSemibold,
                             FontSize          = 11,
                             Foreground        = new SolidColorBrush(pctColor),
                             VerticalAlignment = VerticalAlignment.Center
@@ -569,7 +671,7 @@ namespace CleanupTemp_Pro
                         card.Children.Add(new TextBlock
                         {
                             Text       = $"{SizeHelper.Format(used)} / {SizeHelper.Format(drv.TotalSize)}",
-                            FontFamily = new FontFamily("Segoe UI"),
+                            FontFamily = _fontRegular,
                             FontSize   = 10,
                             Foreground = new SolidColorBrush(Color.FromRgb(0x88,0x88,0xBB)),
                             Margin     = new Thickness(0, 0, 0, 4)
@@ -760,10 +862,15 @@ namespace CleanupTemp_Pro
                 string dir = @"C:\Windows\SoftwareDistribution\Download";
                 if (!Directory.Exists(dir)) return false;
 
-                // Ищем частично скачанные файлы — признак активной загрузки
+                // Ищем файлы, изменённые в последние 10 минут — признак реальной загрузки.
+                // Просто наличие .esd/.cab не гарантирует активность: они могут быть
+                // остатками предыдущих обновлений.
+                var cutoff = DateTime.UtcNow.AddMinutes(-10);
                 var partialFiles = Directory.EnumerateFiles(dir, "*.esd", SearchOption.AllDirectories)
                     .Concat(Directory.EnumerateFiles(dir, "*.cab", SearchOption.AllDirectories))
-                    .Take(5)
+                    .Take(20)
+                    .Where(f => { try { return File.GetLastWriteTimeUtc(f) >= cutoff; } catch { return false; } })
+                    .Take(1)
                     .ToList();
 
                 return partialFiles.Count > 0;
@@ -805,8 +912,12 @@ namespace CleanupTemp_Pro
                     svc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(25));
                 }
 
-                // Даём файловой системе пару секунд отпустить хэндлы
-                Thread.Sleep(1500);
+                // Даём файловой системе немного времени отпустить хэндлы.
+                // Используем короткий spin-wait вместо блокирующего Thread.Sleep,
+                // чтобы не морозить поток пула надолго.
+                var deadline = DateTime.UtcNow.AddMilliseconds(800);
+                while (DateTime.UtcNow < deadline)
+                    Thread.Sleep(50);
                 return true;
             }
             catch { return false; }
@@ -840,32 +951,39 @@ namespace CleanupTemp_Pro
         private async void ScanBtn_Execute()
         {
             if (_isRunning) return;
+
             _fileItems.Clear();
             _totalFoundBytes = 0;
             _statTemp = _statBrowser = _statRecycle = 0;
             StatTempFiles.Text = StatBrowserFiles.Text = StatRecycleBin.Text = "0";
             StatCleaned.Text = "0";
-            TotalSizeText.Text = "0 МБ"; FileCountText.Text = "Поиск...";
+            TotalSizeText.Text = "0 МБ";
+            FileCountText.Text = "Поиск...";
             ListCountLabel.Text = "";
+            // Сразу сбрасываем старый статус — чтобы "Система чиста!" не висел
+            // пока идёт новое сканирование
+            SetStatus("Сканирование...", StatusKind.Scanning);
+            SetProgress(0, "Подготовка...");
 
             if (_showingHistory) SwitchTab(false);
 
             _isRunning = true;
-            _cts?.Cancel();   // сначала отменяем (если старый токен ещё жив)
-            _cts?.Dispose();  // потом освобождаем
+            var oldCts = _cts;
             _cts = new CancellationTokenSource();
+            oldCts?.Cancel();
+            oldCts?.Dispose();
             SetUiRunning(true);
-            SetStatus("Сканирование...", StatusKind.Scanning);
-            SetProgress(0, "Подготовка...");
 
-            var paths      = GetScanPaths();
-            bool doRecycle = ChkRecycleBin?.IsChecked == true;
-            var token      = _cts.Token;
+            var paths       = GetScanPaths();
+            bool doRecycle  = ChkRecycleBin?.IsChecked  == true;
+            bool doEventLog = ChkEventLogs?.IsChecked   == true;
+            var token       = _cts.Token;
 
-            // ── НОВОЕ: предупреждение если WU активна ──
+            // Проверяем активность WU только если выбран Windows Temp и токен не отменён
             bool wuActive = false;
-            await Task.Run(() => { wuActive = IsWindowsUpdateActive(); });
-            if (wuActive && ChkWinTemp?.IsChecked == true)
+            if (ChkWinTemp?.IsChecked == true && !token.IsCancellationRequested)
+                await Task.Run(() => { wuActive = IsWindowsUpdateActive(); });
+            if (wuActive)
             {
                 SetStatus("⚠ Обнаружена активная загрузка обновлений Windows", StatusKind.Error);
             }
@@ -875,18 +993,57 @@ namespace CleanupTemp_Pro
                 await Task.Run(() =>
                 {
                     int total = paths.Count, done = 0;
-                    foreach (var (dir, cat, icon) in paths)
+
+                    var scanOpts = new ParallelOptions
                     {
-                        if (token.IsCancellationRequested) break;
-                        int p = total > 0 ? (int)(done * 100.0 / total) : 0;
-                        Dispatcher.Invoke(() => SetProgress(p, $"Сканирую: {cat}..."));
+                        MaxDegreeOfParallelism = Math.Min(4, Environment.ProcessorCount),
+                        CancellationToken      = CancellationToken.None
+                    };
+
+                    Parallel.ForEach(paths, scanOpts, item =>
+                    {
+                        if (token.IsCancellationRequested) return;
+                        var (dir, cat, icon) = item;
                         if (Directory.Exists(dir)) ScanDir(dir, cat, icon, token);
-                        done++;
-                    }
+                        // Обновляем только процент — без названия категории,
+                        // чтобы прогресс не прыгал хаотично при параллельном сканировании
+                        int idx = Interlocked.Increment(ref done);
+                        int p   = total > 0 ? (int)(idx * 100.0 / total) : 0;
+                        Dispatcher.InvokeAsync(() => SetProgress(p, $"Сканирование... {p}%"),
+                            DispatcherPriority.Background);
+                    });
                     if (doRecycle && !token.IsCancellationRequested)
                     {
                         Dispatcher.Invoke(() => SetProgress(95, "Проверяю корзину..."));
                         ScanRecycleBin();
+                    }
+
+                    // ── Логи событий — через wevtutil ──
+                    if (doEventLog && !token.IsCancellationRequested)
+                    {
+                        Dispatcher.Invoke(() => SetProgress(97, "Проверяю логи событий..."));
+                        var channels = GetEventLogChannels();
+                        long totalLogBytes = channels.Sum(c => c.SizeBytes);
+                        int  logCount      = channels.Count(c => c.SizeBytes > 0);
+                        if (totalLogBytes > 0)
+                        {
+                            Dispatcher.Invoke(() =>
+                            {
+                                _totalFoundBytes += totalLogBytes;
+                                _statTemp        += logCount;
+                                _fileItems.Add(new FileItem
+                                {
+                                    Icon      = "📋",
+                                    Path      = $"Логи событий Windows ({logCount} каналов с записями)",
+                                    Category  = "Логи событий",
+                                    SizeBytes = totalLogBytes
+                                });
+                                TotalSizeText.Text  = SizeHelper.Format(_totalFoundBytes);
+                                FileCountText.Text  = $"{_fileItems.Count} объектов";
+                                ListCountLabel.Text = $"{_fileItems.Count} объектов";
+                                StatTempFiles.Text  = _statTemp.ToString();
+                            });
+                        }
                     }
                 }, CancellationToken.None);
             }
@@ -894,45 +1051,61 @@ namespace CleanupTemp_Pro
             finally
             {
                 _isRunning = false;
-                bool wasCancelled = _cts?.IsCancellationRequested == true;
                 SetUiRunning(false, _fileItems.Count > 0);
-                if (wasCancelled)
-                {
-                    SetProgress(0, "Сканирование остановлено");
-                    SetStatus("Остановлено", StatusKind.Stopped);
-                }
-                else if (_fileItems.Count > 0)
-                {
-                    bool browsersOpen = ChkBrowserCache?.IsChecked == true &&
-                        new[] { "chrome", "msedge", "firefox", "brave", "opera", "browser", "vivaldi" }
-                            .Any(n => Process.GetProcessesByName(n).Length > 0);
+            }
 
-                    string hint = browsersOpen ? " ⚠ закройте браузеры перед очисткой" : "";
-                    SetProgress(100, $"Найдено {_fileItems.Count} объектов • {SizeHelper.Format(_totalFoundBytes)}");
-                    SetStatus($"Найдено {SizeHelper.Format(_totalFoundBytes)} мусора{hint}", StatusKind.Found);
-                }
-                else
-                {
-                    SetProgress(100, "Система чиста — мусор не найден");
-                    SetStatus("Система чиста! ✓", StatusKind.Done);
-                }
+            bool wasCancelled = _cts?.IsCancellationRequested == true;
+            if (wasCancelled)
+            {
+                SetProgress(0, "Сканирование остановлено");
+                SetStatus("Остановлено", StatusKind.Stopped);
+                return;
+            }
+
+            // Ждём пока все фоновые InvokeAsync завершатся — иначе "Сканирование... 100%"
+            // от последней итерации параллельного цикла перезапишет финальный статус
+            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+            if (_fileItems.Count > 0)
+            {
+                bool browsersOpen = ChkBrowserCache?.IsChecked == true &&
+                    new[] { "chrome", "msedge", "firefox", "brave", "opera", "browser", "vivaldi" }
+                        .Any(n => Process.GetProcessesByName(n).Length > 0);
+                string hint = browsersOpen ? " ⚠ закройте браузеры перед очисткой" : "";
+                SetProgress(100, $"Найдено {_fileItems.Count} объектов • {SizeHelper.Format(_totalFoundBytes)}");
+                SetStatus($"Найдено {SizeHelper.Format(_totalFoundBytes)} мусора{hint}", StatusKind.Found);
+            }
+            else
+            {
+                SetProgress(100, "Система чиста! ✓");
+                SetStatus("Система чиста! ✓", StatusKind.Done);
             }
         }
 
         private void ScanDir(string dir, string cat, string icon, CancellationToken token)
         {
+            // Таймаут-источники объявляем до try, чтобы finally мог их освободить
+            CancellationTokenSource? timeoutCts = null;
+            CancellationTokenSource? linkedCts  = null;
             try
             {
                 bool isRootJunk = cat.StartsWith("Мусор в корне", StringComparison.OrdinalIgnoreCase);
                 bool isRecycleBinDir = dir.IndexOf("$RECYCLE.BIN", StringComparison.OrdinalIgnoreCase) >= 0;
 
-                // ── НОВОЕ: для SoftwareDistribution ставим таймаут 30 сек ──
+                // ── Таймаут 30 сек только для SoftwareDistribution ──────────
+                // Для остальных папок передаём token напрямую, не создавая лишних объектов.
                 bool isSoftwareDist = dir.IndexOf("SoftwareDistribution", StringComparison.OrdinalIgnoreCase) >= 0;
-                using var timeoutCts = isSoftwareDist
-                    ? new CancellationTokenSource(TimeSpan.FromSeconds(30))
-                    : new CancellationTokenSource();
-                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token);
-                var effectiveToken = linkedCts.Token;
+                CancellationToken effectiveToken;
+                if (isSoftwareDist)
+                {
+                    timeoutCts   = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    linkedCts    = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token);
+                    effectiveToken = linkedCts.Token;
+                }
+                else
+                {
+                    effectiveToken = token;
+                }
 
                 var opts = new EnumerationOptions
                 {
@@ -943,11 +1116,27 @@ namespace CleanupTemp_Pro
                         : FileAttributes.System
                 };
 
-                bool isBrowser = cat.Contains("Chrome") || cat.Contains("Edge") ||
+                bool isBrowser   = cat.Contains("Chrome") || cat.Contains("Edge") ||
                                  cat.Contains("Firefox") || cat.Contains("Brave") ||
                                  cat.Contains("Opera")   || cat.Contains("Яндекс") ||
                                  cat.Contains("Vivaldi");
-                bool isRecycle = cat.Contains("орзин");
+                bool isRecycle   = cat.Contains("орзин");
+
+                // Минимальный возраст файла чтобы считать его мусором.
+                // Активные программы постоянно создают/пересоздают temp и кэш-файлы —
+                // без фильтра после каждой очистки сразу "находится" новый мусор.
+                //   Temp / WU кэш / Мусор в корне → 5 минут
+                //   Браузеры / Thumbnails / Prefetch / INetCache → 2 минуты
+                //   Остальные (корзина, логи) → без фильтра
+                DateTime minAge;
+                if (cat.Contains("Temp") || cat.Contains("WU кэш") ||
+                    cat.Contains("Windows Update") || cat.Contains("Мусор в корне"))
+                    minAge = DateTime.UtcNow.AddMinutes(-5);
+                else if (cat.Contains("Thumbnails") || cat.Contains("Prefetch") ||
+                         cat.Contains("INetCache")  || isBrowser)
+                    minAge = DateTime.UtcNow.AddMinutes(-2);
+                else
+                    minAge = DateTime.MaxValue; // корзина, логи — без фильтра по возрасту
 
                 var sw          = Stopwatch.StartNew();
                 long batchBytes = 0;
@@ -962,20 +1151,23 @@ namespace CleanupTemp_Pro
                     int t = batchT, br = batchBr, rc = batchRc;
                     batchItems.Clear(); batchBytes = 0; batchT = batchBr = batchRc = 0;
 
-                    Dispatcher.Invoke(() =>
+                    Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
                     {
-                        foreach (var it in items) _fileItems.Add(it);
+                        // Один Reset вместо тысяч Add — ListView перерисовывается один раз
+                        _fileItems.AddRange(items);
+
                         _totalFoundBytes += bytes;
                         _statTemp        += t;
                         _statBrowser     += br;
                         _statRecycle     += rc;
+                        // Обновляем счётчики один раз на весь батч, а не на каждый файл
                         TotalSizeText.Text    = SizeHelper.Format(_totalFoundBytes);
                         FileCountText.Text    = $"{_fileItems.Count} файлов";
                         ListCountLabel.Text   = $"{_fileItems.Count} объектов";
                         StatTempFiles.Text    = _statTemp.ToString();
                         StatBrowserFiles.Text = _statBrowser.ToString();
                         StatRecycleBin.Text   = _statRecycle.ToString();
-                    }, DispatcherPriority.Background);
+                    });
                 }
 
                 foreach (var file in Directory.EnumerateFiles(dir, "*", opts))
@@ -983,6 +1175,8 @@ namespace CleanupTemp_Pro
                     if (effectiveToken.IsCancellationRequested) break;
                     try
                     {
+                        // Для "Мусор в корне" — сначала проверяем расширение (без I/O),
+                        // чтобы не создавать FileInfo для файлов которые не являются мусором
                         if (isRootJunk)
                         {
                             string ext  = System.IO.Path.GetExtension(file);
@@ -997,14 +1191,42 @@ namespace CleanupTemp_Pro
                         var fi = new FileInfo(file);
                         if (!fi.Exists) continue;
                         if (IsInProtectedFolder(file)) continue;
+
+                        // Пропускаем файлы моложе порога — применяется ко ВСЕМ категориям
+                        if (fi.LastWriteTimeUtc > minAge) continue;
+
+                        string fileName = fi.Name;
+                        string fileExt  = fi.Extension;
+
+                        // Пропускаем живые БД и журналы — они заблокированы процессами
+                        if (_protectedFileNames.Contains(fileName)) continue;
+
+                        // В папках кэша браузеров .dat/.jfm — это БД, не кэш-файлы
+                        if (isBrowser && _protectedExtensions.Contains(fileExt)) continue;
+
                         long sz = fi.Length;
+
+                        // Пропускаем файлы 0 байт в Temp — их держат активные процессы
+                        if (sz == 0 && (cat.Contains("Temp") || cat.Contains("temp"))) continue;
+
+                        // В Temp пропускаем .dll/.exe и другие рабочие файлы приложений —
+                        // они попадают туда при установке/обновлении и могут быть активны
+                        if (cat.Contains("Temp") && _safeExtensionsInTemp.Contains(fileExt)) continue;
+
+                        // Для .tmp файлов в Temp — проверяем не заблокирован ли файл процессом.
+                        // Только для .tmp: проверка через FileStream дорогая, не делаем для всех.
+                        // Заблокированные файлы находятся при каждом скане но не удаляются.
+                        if (fileExt.Equals(".tmp", StringComparison.OrdinalIgnoreCase) &&
+                            cat.Contains("Temp") && IsTmpFileLocked(file)) continue;
                         batchBytes += sz;
                         if      (isBrowser) batchBr++;
                         else if (isRecycle) batchRc++;
                         else                batchT++;
                         batchItems.Add(new FileItem { Icon = icon, Path = file, Category = cat, SizeBytes = sz });
 
-                        if (sw.ElapsedMilliseconds >= 150 || batchItems.Count >= 200)
+                        // Флушим реже: раз в 300 мс или каждые 500 файлов.
+                        // Меньший интервал = больше BeginInvoke в очереди = тормозящий счётчик.
+                        if (sw.ElapsedMilliseconds >= 300 || batchItems.Count >= 500)
                         {
                             Flush(); sw.Restart();
                         }
@@ -1014,6 +1236,82 @@ namespace CleanupTemp_Pro
                 Flush();
             }
             catch { }
+            finally
+            {
+                // Освобождаем CTS только если создавали их (только для SoftwareDistribution)
+                linkedCts?.Dispose();
+                timeoutCts?.Dispose();
+            }
+        }
+
+        // ═══════════════════════════════════════
+        //  ЛОГИ СОБЫТИЙ — через wevtutil
+        // ═══════════════════════════════════════
+
+        /// <summary>
+        /// Быстро получает список непустых каналов логов по размеру .evtx файлов.
+        /// НЕ использует wevtutil gli на каждый канал — это сотни процессов и занимает минуты.
+        /// Вместо этого читаем размеры файлов напрямую: пустой лог = 68КБ (базовый резерв Windows).
+        /// Канал считается непустым если файл > 69КБ.
+        /// </summary>
+        private static List<(string Channel, long SizeBytes)> GetEventLogChannels()
+        {
+            var result = new List<(string, long)>();
+            const long emptyThreshold = 69_632; // 68 КБ — пустой зарезервированный лог
+
+            try
+            {
+                var di = new DirectoryInfo(@"C:\Windows\System32\winevt\Logs");
+                if (!di.Exists) return result;
+
+                // EnumerateFiles возвращает FileInfo с уже готовыми метаданными —
+                // не нужно отдельно обращаться к диску для каждого файла
+                foreach (var fi in di.EnumerateFiles("*.evtx"))
+                {
+                    long sz = fi.Length;
+                    if (sz <= emptyThreshold) continue;
+
+                    string channel = fi.Name
+                        .Replace(".evtx", "", StringComparison.OrdinalIgnoreCase)
+                        .Replace("%4", "/");
+
+                    result.Add((channel, sz - emptyThreshold));
+                }
+            }
+            catch { }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Очищает все каналы через нативный Windows Event Log API —
+        /// без запуска внешних процессов, намного быстрее чем wevtutil cl.
+        /// </summary>
+        private static long ClearAllEventLogChannels(List<(string Channel, long SizeBytes)> channels,
+                                                      CancellationToken token)
+        {
+            long totalCleared = 0;
+            var opts = new ParallelOptions
+            {
+                MaxDegreeOfParallelism = Environment.ProcessorCount,
+                CancellationToken      = token
+            };
+            try
+            {
+                Parallel.ForEach(channels, opts, item =>
+                {
+                    try
+                    {
+                        // Нативный API — никаких внешних процессов
+                        using var session = new EventLogSession();
+                        session.ClearLog(item.Channel);
+                        Interlocked.Add(ref totalCleared, item.SizeBytes);
+                    }
+                    catch { }
+                });
+            }
+            catch (OperationCanceledException) { }
+            return totalCleared;
         }
 
         private void ScanRecycleBin()
@@ -1095,15 +1393,14 @@ namespace CleanupTemp_Pro
             if (ChkThumbnails?.IsChecked == true)
                 L.Add((System.IO.Path.Combine(local, @"Microsoft\Windows\Explorer"), "Thumbnails кэш", "🖼️"));
 
-            if (ChkEventLogs?.IsChecked == true)
-                L.Add((@"C:\Windows\System32\winevt\Logs", "Логи событий", "📋"));
+            // Логи событий НЕ добавляем в обычный список — они сканируются
+            // отдельно через wevtutil, иначе Windows пересоздаёт файлы мгновенно
 
             if (ChkDnsCache?.IsChecked == true)
             {
                 L.Add((System.IO.Path.Combine(local, @"Microsoft\Windows\INetCache"), "IE/Edge Legacy Cache", "🔗"));
-                string webCachePath = System.IO.Path.Combine(local, @"Microsoft\Windows\WebCache");
-                if (Directory.Exists(webCachePath))
-                    L.Add((webCachePath, "Edge Legacy WebCache", "🔗"));
+                // WebCache содержит живую базу ESE (WebCacheV01.dat), заблокированную svchost —
+                // её нельзя удалять напрямую, поэтому папку из сканирования исключаем.
             }
 
             if (ChkMSOffice?.IsChecked == true)
@@ -1261,6 +1558,11 @@ namespace CleanupTemp_Pro
         {
             if (_isRunning || _fileItems.Count == 0) return;
 
+            // Сразу блокируем кнопку и выставляем флаг — иначе двойной клик
+            // запустит метод дважды пока диалог подтверждения ещё открыт
+            _isRunning = true;
+            SetUiRunning(true);
+
             var dlg = new CustomDialog(
                 "Подтверждение очистки",
                 $"Будет удалено {_fileItems.Count} объектов.\nЭто действие нельзя отменить.",
@@ -1272,9 +1574,15 @@ namespace CleanupTemp_Pro
                 },
                 showCancel: true);
             dlg.ShowDialog();
-            if (!dlg.Result) return;
+            if (!dlg.Result)
+            {
+                // Пользователь отменил — снимаем блокировку
+                _isRunning = false;
+                SetUiRunning(false, _fileItems.Count > 0);
+                return;
+            }
 
-            // ── НОВОЕ: предупреждение если WU скачивает обновления ──
+            // ── предупреждение если WU скачивает обновления ──
             bool hasWuFiles = _fileItems.Any(x => x.Category == "Windows Update кэш"
                                                || x.Category.StartsWith("WU кэш"));
             if (hasWuFiles)
@@ -1293,7 +1601,12 @@ namespace CleanupTemp_Pro
                         DialogKind.Warning,
                         showCancel: true);
                     wuDlg.ShowDialog();
-                    if (!wuDlg.Result) return;
+                    if (!wuDlg.Result)
+                    {
+                        _isRunning = false;
+                        SetUiRunning(false, _fileItems.Count > 0);
+                        return;
+                    }
                 }
             }
 
@@ -1324,17 +1637,21 @@ namespace CleanupTemp_Pro
                         DialogKind.Warning,
                         showCancel: true);
                     warnDlg.ShowDialog();
-                    if (!warnDlg.Result) return;
+                    if (!warnDlg.Result)
+                    {
+                        _isRunning = false;
+                        SetUiRunning(false, _fileItems.Count > 0);
+                        return;
+                    }
                 }
             }
 
-            _isRunning = true;
-            _cts?.Cancel();   // сначала отменяем
-            _cts?.Dispose();  // потом освобождаем
+            var oldCleanCts = _cts;
             _cts = new CancellationTokenSource();
+            oldCleanCts?.Cancel();
+            oldCleanCts?.Dispose();
             _cleanedBytes = 0;
             StatCleaned.Text = "0";
-            SetUiRunning(true);
             SetStatus("Очистка...", StatusKind.Cleaning);
             SetProgress(0, "Начинаю очистку...");
 
@@ -1379,42 +1696,91 @@ namespace CleanupTemp_Pro
 
                     try
                     {
-                        foreach (var item in regular)
+                        // ── Логи событий обрабатываем отдельно, до параллельного удаления ──
+                        var eventLogItem = regular.FirstOrDefault(x => x.Category == "Логи событий");
+                        if (eventLogItem != null && !token.IsCancellationRequested)
                         {
-                            if (token.IsCancellationRequested) break;
-                            try
+                            Dispatcher.Invoke(() =>
                             {
-                                if (File.Exists(item.Path))
-                                {
-                                    var attr = File.GetAttributes(item.Path);
-                                    if ((attr & (FileAttributes.ReadOnly | FileAttributes.System)) != 0)
-                                        File.SetAttributes(item.Path, FileAttributes.Normal);
-                                    File.Delete(item.Path);
-                                    Interlocked.Add(ref _cleanedBytes, item.SizeBytes);
-                                    Interlocked.Increment(ref deleted);
-                                }
+                                SetProgress(5, "Очищаю логи событий через wevtutil...");
+                                SetStatus("Очищаю логи событий...", StatusKind.Cleaning);
+                            });
+                            var channels = GetEventLogChannels();
+                            long clearedBytes = ClearAllEventLogChannels(channels, token);
+                            if (clearedBytes > 0)
+                            {
+                                Interlocked.Add(ref _cleanedBytes, clearedBytes);
+                                Interlocked.Increment(ref deleted);
                             }
-                            catch { Interlocked.Increment(ref skipped); }
+                            else Interlocked.Increment(ref skipped);
 
-                            done++;
-                            if (sw.ElapsedMilliseconds >= 200 || done == regular.Count)
+                            Interlocked.Increment(ref done);
+                            Dispatcher.Invoke(() =>
                             {
-                                sw.Restart();
-                                int d2 = done; long c2 = _cleanedBytes;
-                                var deletedPaths = new HashSet<string>(
-                                    regular.Where(x => !File.Exists(x.Path)).Select(x => x.Path));
-                                Dispatcher.Invoke(() =>
-                                {
-                                    var toRemove = _fileItems
-                                        .Where(x => x.Category != "Корзина" && deletedPaths.Contains(x.Path))
-                                        .ToList();
-                                    SetProgress(regular.Count > 0 ? d2 * 100.0 / regular.Count : 100,
-                                        $"Удалено {d2} / {regular.Count} • {SizeHelper.Format(c2)}");
-                                    StatCleaned.Text = SizeHelper.Format(c2);
-                                    foreach (var r in toRemove) _fileItems.Remove(r);
-                                }, DispatcherPriority.Background);
-                            }
+                                var logEntry = _fileItems.FirstOrDefault(x => x.Category == "Логи событий");
+                                if (logEntry != null) _fileItems.Remove(logEntry);
+                                StatCleaned.Text = SizeHelper.Format(_cleanedBytes);
+                            }, DispatcherPriority.Background);
                         }
+
+                        // Параллельное удаление — 4 потока работает хорошо и на HDD, и на SSD.
+                        // DriveType.Fixed не различает HDD и SSD, поэтому не пытаемся угадать.
+                        var regularFiles = regular.Where(x => x.Category != "Логи событий").ToList();
+                        var parallelOpts = new ParallelOptions
+                        {
+                            MaxDegreeOfParallelism = 4,
+                            CancellationToken      = token
+                        };
+                        // Используем long для атомарного сравнения времени без lock
+                        long lastUiUpdateMs = 0;
+
+                        try
+                        {
+                            Parallel.ForEach(regularFiles, parallelOpts, item =>
+                            {
+                                try
+                                {
+                                    if (File.Exists(item.Path))
+                                    {
+                                        var attr = File.GetAttributes(item.Path);
+                                        if ((attr & (FileAttributes.ReadOnly | FileAttributes.System)) != 0)
+                                            File.SetAttributes(item.Path, FileAttributes.Normal);
+                                        File.Delete(item.Path);
+                                        Interlocked.Add(ref _cleanedBytes, item.SizeBytes);
+                                        Interlocked.Increment(ref deleted);
+                                    }
+                                }
+                                catch { Interlocked.Increment(ref skipped); }
+
+                                int d2 = Interlocked.Increment(ref done);
+                                long nowMs = sw.ElapsedMilliseconds;
+                                long prevMs = Interlocked.Exchange(ref lastUiUpdateMs, nowMs);
+
+                                // Обновляем UI каждые 200мс или на последнем файле.
+                                // Сравниваем с regularFiles.Count (не regular.Count) — regular включает логи событий.
+                                if (nowMs - prevMs >= 200 || d2 == regularFiles.Count)
+                                {
+                                    long c2 = _cleanedBytes;
+                                    var snapshot2 = regularFiles
+                                        .Where(x => !File.Exists(x.Path))
+                                        .Select(x => x.Path)
+                                        .ToHashSet();
+                                    Dispatcher.InvokeAsync(() =>
+                                    {
+                                        var toRemove = _fileItems
+                                            .Where(x => x.Category != "Корзина" &&
+                                                        x.Category != "Логи событий" &&
+                                                        snapshot2.Contains(x.Path))
+                                            .ToList();
+                                        SetProgress(regularFiles.Count > 0 ? d2 * 100.0 / regularFiles.Count : 100,
+                                            $"Удалено {d2} / {regularFiles.Count} • {SizeHelper.Format(c2)}");
+                                        StatCleaned.Text = SizeHelper.Format(c2);
+                                        foreach (var r in toRemove) _fileItems.Remove(r);
+                                    }, DispatcherPriority.Background);
+                                }
+                            });
+                        }
+                        catch (OperationCanceledException) { }
                     }
                     finally
                     {
@@ -1466,6 +1832,8 @@ namespace CleanupTemp_Pro
                 _statTemp    = 0;
                 _statBrowser = 0;
                 _statRecycle = 0;
+                // После очистки список гарантированно очищаем
+                _fileItems.Clear();
                 StatTempFiles.Text    = "0";
                 StatBrowserFiles.Text = "0";
                 StatRecycleBin.Text   = "0";
