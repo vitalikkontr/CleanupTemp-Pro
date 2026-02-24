@@ -93,7 +93,7 @@
                                     <Run Text=" Pro" Foreground="#06D6C7"
                                          FontFamily="Segoe UI Semibold"/>
                                 </TextBlock>
-                                <TextBlock Text="System Cleaner v3.1.0"
+                                <TextBlock Text="System Cleaner v3.2.0"
                                            FontFamily="Segoe UI" FontSize="10"
                                            Foreground="{StaticResource TextSecondaryBrush}"
                                            Margin="0,1,0,0"/>
@@ -690,7 +690,7 @@
                         Background="#0A0A18" BorderBrush="#1A1A3A"
                         BorderThickness="0,1,0,0">
                     <Grid Margin="20,0">
-                        <TextBlock Text="CleanupTemp Pro v3.1.0  •  Запускайте от имени администратора для полной очистки"
+                        <TextBlock Text="CleanupTemp Pro v3.2.0  •  Запускайте от имени администратора для полной очистки"
                                    FontFamily="Segoe UI" FontSize="11"
                                    Foreground="#3A3A6A" VerticalAlignment="Center"/>
                         <TextBlock Text="© 2026 CleanupTemp Pro"
@@ -711,7 +711,8 @@
                             </RadialGradientBrush>
                         </Ellipse.Fill>
                     </Ellipse>
-                    <Ellipse Canvas.Right="-200" Canvas.Bottom="-200"
+                    <!-- Декоративный orb справа снизу — позиция через Left/Top от края окна -->
+                    <Ellipse Canvas.Left="760" Canvas.Top="420"
                              Width="600" Height="600" Opacity="0.025">
                         <Ellipse.Fill>
                             <RadialGradientBrush>

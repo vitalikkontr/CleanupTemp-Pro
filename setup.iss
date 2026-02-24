@@ -1,8 +1,8 @@
 [Setup]
 AppId={{7F49CBC0-9540-455B-B05E-78FD14DFCE6B}}
 AppName=Cleanup Temp Pro
-AppVersion=3.1.0
-AppVerName=Cleanup Temp Pro 3.1.0
+AppVersion=3.2.0
+AppVerName=Cleanup Temp Pro 3.2.0
 AppPublisher=Виталий Николаевич (vitalikkontr)
 AppPublisherURL=https://github.com/vitalikkontr/CleanupTemp-Pro
 AppSupportURL=https://github.com/vitalikkontr/CleanupTemp-Pro/issues
@@ -12,7 +12,7 @@ DefaultDirName={autopf}\Cleanup Temp Professional
 DefaultGroupName=Cleanup Temp
 DisableProgramGroupPage=yes
 OutputDir=C:\Release\Setup
-OutputBaseFilename=CleanupTemp-Professional-Setup-v3.1.0
+OutputBaseFilename=CleanupTemp-Professional-Setup-v3.2.0
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

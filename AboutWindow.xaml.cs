@@ -49,7 +49,11 @@ namespace CleanupTemp_Pro
                 b.Freeze();
                 return b;
             }
-            catch { return null; }
+            catch (Exception ex)
+            {
+                AppLog.Warn($"AboutWindow.TryLoad failed: {uri} | {ex.Message}");
+                return null;
+            }
         }
 
         private void CloseBorder_Click(object sender, MouseButtonEventArgs e) => Close();

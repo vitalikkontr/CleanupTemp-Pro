@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
 
 namespace CleanupTemp_Pro
 {
@@ -20,9 +21,15 @@ namespace CleanupTemp_Pro
     {
         public bool Result { get; private set; } = false;
 
-        // Запоминаем цвета кнопки OK для корректного восстановления в OkBorder_Leave
+        // Исходные цвета кнопки OK — запоминаем для корректного восстановления в Leave
         private Color _okBtnC1;
         private Color _okBtnC2;
+
+        // Исходные цвета кнопки Отмена
+        private static readonly Color CancelC1 = Color.FromRgb(0x29, 0x79, 0xFF);
+        private static readonly Color CancelC2 = Color.FromRgb(0x15, 0x65, 0xC0);
+        private static readonly Color CancelHoverC1 = Color.FromRgb(0x30, 0x88, 0xFF);
+        private static readonly Color CancelHoverC2 = Color.FromRgb(0x20, 0x70, 0xEE);
 
         public CustomDialog(string title, string message,
                             DialogKind kind = DialogKind.Info,
@@ -32,90 +39,98 @@ namespace CleanupTemp_Pro
             InitializeComponent();
             Owner = Application.Current.MainWindow;
 
-            TitleText.Text = title;
+            TitleText.Text   = title;
             MessageText.Text = message;
 
-            // Позволяет перетаскивать окно мышкой
-            this.MouseLeftButtonDown += (s, e) => {
+            // Перетаскивание окна
+            MouseLeftButtonDown += (s, e) => {
                 if (e.LeftButton == MouseButtonState.Pressed) DragMove();
             };
 
-            // ── Цвета и иконка ──
-            Color iconBg1, iconBg2, btnC1, btnC2;
+            // ── Цвета и иконка по типу диалога ──
+            Color iconBg1, iconBg2;
 
             switch (kind)
             {
                 case DialogKind.Success:
-                    IconText.Text = "✅";
-                    iconBg1 = Color.FromRgb(0x0A, 0x3A, 0x2A);
-                    iconBg2 = Color.FromRgb(0x1A, 0x4A, 0x3A);
-                    btnC1 = Color.FromRgb(0x00, 0xE6, 0x76);
-                    btnC2 = Color.FromRgb(0x00, 0xB0, 0xFF);
+                    IconText.Text  = "✅";
+                    iconBg1        = Color.FromRgb(0x0A, 0x3A, 0x2A);
+                    iconBg2        = Color.FromRgb(0x1A, 0x4A, 0x3A);
+                    _okBtnC1       = Color.FromRgb(0x00, 0xE6, 0x76);
+                    _okBtnC2       = Color.FromRgb(0x00, 0xB0, 0xFF);
                     OkBtnText.Text = "Отлично!";
                     break;
+
                 case DialogKind.Warning:
-                    IconText.Text = "⚠️";
-                    iconBg1 = Color.FromRgb(0x3A, 0x2A, 0x00);
-                    iconBg2 = Color.FromRgb(0x5A, 0x3A, 0x00);
-                    btnC1 = Color.FromRgb(0xFF, 0x8C, 0x00);
-                    btnC2 = Color.FromRgb(0xFF, 0xA5, 0x00);
+                    IconText.Text  = "⚠️";
+                    iconBg1        = Color.FromRgb(0x3A, 0x2A, 0x00);
+                    iconBg2        = Color.FromRgb(0x5A, 0x3A, 0x00);
+                    _okBtnC1       = Color.FromRgb(0xFF, 0x8C, 0x00);
+                    _okBtnC2       = Color.FromRgb(0xFF, 0xA5, 0x00);
                     OkBtnText.Text = "Понятно";
                     break;
+
                 case DialogKind.Confirm:
-                    IconText.Text = "❓";
-                    iconBg1 = Color.FromRgb(0x1A, 0x2A, 0x5A);
-                    iconBg2 = Color.FromRgb(0x2A, 0x1A, 0x5A);
-                    btnC1 = Color.FromRgb(0xFF, 0x2E, 0x95);
-                    btnC2 = Color.FromRgb(0x9D, 0x37, 0xFF);
+                    IconText.Text  = "❓";
+                    iconBg1        = Color.FromRgb(0x1A, 0x2A, 0x5A);
+                    iconBg2        = Color.FromRgb(0x2A, 0x1A, 0x5A);
+                    _okBtnC1       = Color.FromRgb(0xFF, 0x2E, 0x95);
+                    _okBtnC2       = Color.FromRgb(0x9D, 0x37, 0xFF);
                     OkBtnText.Text = "Очистить";
                     break;
+
                 case DialogKind.Error:
-                    IconText.Text = "❌";
-                    iconBg1 = Color.FromRgb(0x3A, 0x0A, 0x15);
-                    iconBg2 = Color.FromRgb(0x5A, 0x1A, 0x25);
-                    btnC1 = Color.FromRgb(0xFF, 0x3D, 0x00);
-                    btnC2 = Color.FromRgb(0xCC, 0x00, 0x44);
+                    IconText.Text  = "❌";
+                    iconBg1        = Color.FromRgb(0x3A, 0x0A, 0x15);
+                    iconBg2        = Color.FromRgb(0x5A, 0x1A, 0x25);
+                    _okBtnC1       = Color.FromRgb(0xFF, 0x3D, 0x00);
+                    _okBtnC2       = Color.FromRgb(0xCC, 0x00, 0x44);
                     OkBtnText.Text = "Закрыть";
                     break;
-                default:
-                    IconText.Text = "ℹ️";
-                    iconBg1 = Color.FromRgb(0x1A, 0x2A, 0x5A);
-                    iconBg2 = Color.FromRgb(0x2A, 0x1A, 0x5A);
-                    btnC1 = Color.FromRgb(0x29, 0x79, 0xFF);
-                    btnC2 = Color.FromRgb(0xAA, 0x00, 0xFF);
+
+                default: // Info
+                    IconText.Text  = "ℹ️";
+                    iconBg1        = Color.FromRgb(0x1A, 0x2A, 0x5A);
+                    iconBg2        = Color.FromRgb(0x2A, 0x1A, 0x5A);
+                    _okBtnC1       = Color.FromRgb(0x29, 0x79, 0xFF);
+                    _okBtnC2       = Color.FromRgb(0xAA, 0x00, 0xFF);
                     OkBtnText.Text = "ОК";
                     break;
             }
 
-            IconBorder.Background = new LinearGradientBrush(iconBg1, iconBg2, 45);
-            _okBtnC1 = btnC1;
-            _okBtnC2 = btnC2;
-            OkBtnBorder.Background = new LinearGradientBrush(btnC1, btnC2, new Point(0, 0.5), new Point(1, 0.5));
+            IconBorder.Background  = MakeGradient(iconBg1, iconBg2);
+            OkBtnBorder.Background = MakeGradient(_okBtnC1, _okBtnC2);
 
             // ── Статистика ──
-            if (stats != null && stats.Count > 0)
+            if (stats is { Count: > 0 })
             {
                 StatsPanel.Visibility = Visibility.Visible;
                 foreach (var row in stats)
                 {
-                    var grid = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+                    var color = TryParseColor(row.Color, Color.FromRgb(0x4A, 0x9E, 0xFF));
+                    var grid  = new Grid { Margin = new Thickness(0, 0, 0, 8) };
                     grid.ColumnDefinitions.Add(new ColumnDefinition());
                     grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                    var label = new TextBlock { Text = row.Label, FontSize = 12, Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0xBB)), VerticalAlignment = VerticalAlignment.Center };
-                    var brush = new SolidColorBrush(
-                        (Color)ColorConverter.ConvertFromString(row.Color)!
-                    );
 
-                    var val = new TextBlock
+                    var label = new System.Windows.Controls.TextBlock
                     {
-                        Text = row.Value,
-                        FontSize = 12,
-                        FontWeight = FontWeights.Bold,
-                        Foreground = brush,
+                        Text              = row.Label,
+                        FontSize          = 12,
+                        Foreground        = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0xBB)),
                         VerticalAlignment = VerticalAlignment.Center
                     };
+                    var val = new System.Windows.Controls.TextBlock
+                    {
+                        Text              = row.Value,
+                        FontSize          = 12,
+                        FontWeight        = FontWeights.Bold,
+                        Foreground        = new SolidColorBrush(color),
+                        VerticalAlignment = VerticalAlignment.Center
+                    };
+
                     Grid.SetColumn(val, 1);
-                    grid.Children.Add(label); grid.Children.Add(val);
+                    grid.Children.Add(label);
+                    grid.Children.Add(val);
                     StatsStack.Children.Add(grid);
                 }
             }
@@ -124,24 +139,46 @@ namespace CleanupTemp_Pro
             if (showCancel)
             {
                 CancelBtnBorder.Visibility = Visibility.Visible;
-                Grid.SetColumn(OkBtnBorder, 2); Grid.SetColumnSpan(OkBtnBorder, 1);
+                Grid.SetColumn(OkBtnBorder, 2);
+                Grid.SetColumnSpan(OkBtnBorder, 1);
             }
             else
             {
                 CancelBtnBorder.Visibility = Visibility.Collapsed;
-                Grid.SetColumn(OkBtnBorder, 0); Grid.SetColumnSpan(OkBtnBorder, 3);
+                Grid.SetColumn(OkBtnBorder, 0);
+                Grid.SetColumnSpan(OkBtnBorder, 3);
             }
         }
 
-        // --- Обработчики кнопок ---
-        private void OkBorder_Click(object sender, MouseButtonEventArgs e) { Result = true; this.DialogResult = true; Close(); }
+        // ── Вспомогательные методы ──────────────────────────────────────────
+
+        private static LinearGradientBrush MakeGradient(Color c1, Color c2)
+            => new(c1, c2, new Point(0, 0.5), new Point(1, 0.5));
+
+        private static DropShadowEffect MakeGlow(Color color, double radius = 35, double opacity = 0.9)
+            => new() { Color = color, BlurRadius = radius, ShadowDepth = 0, Opacity = opacity };
+
+        /// <summary>Безопасно парсит цвет из строки. Возвращает fallback при ошибке.</summary>
+        private static Color TryParseColor(string hex, Color fallback)
+        {
+            try   { return (Color)ColorConverter.ConvertFromString(hex)!; }
+            catch { return fallback; }
+        }
+
+        // ── Кнопка OK ───────────────────────────────────────────────────────
+
+        private void OkBorder_Click(object sender, MouseButtonEventArgs e)
+        {
+            Result = true;
+            DialogResult = true;
+            Close();
+        }
+
         private void OkBorder_Enter(object sender, MouseEventArgs e)
         {
-            OkBtnBorder.Opacity = 1.0;
-            // Осветляем на основе исходного цвета кнопки (зависит от kind)
-            // Добавляем белый стоп посередине для эффекта "glow"
             OkBtnBorder.Background = new LinearGradientBrush(
-                new GradientStopCollection {
+                new GradientStopCollection
+                {
                     new GradientStop(_okBtnC1, 0.0),
                     new GradientStop(Color.FromArgb(0xDD,
                         (byte)Math.Min(255, _okBtnC1.R + 50),
@@ -150,53 +187,39 @@ namespace CleanupTemp_Pro
                     new GradientStop(_okBtnC2, 1.0)
                 },
                 new Point(0, 0.5), new Point(1, 0.5));
-            OkBtnBorder.Effect = new System.Windows.Media.Effects.DropShadowEffect
-            {
-                Color = _okBtnC1,
-                BlurRadius = 35, ShadowDepth = 0, Opacity = 0.9
-            };
+
+            OkBtnBorder.Effect = MakeGlow(_okBtnC1);
         }
+
         private void OkBorder_Leave(object sender, MouseEventArgs e)
         {
-            OkBtnBorder.Opacity = 1.0;
-            // Восстанавливаем исходный цвет кнопки, запомненный в конструкторе по kind
-            OkBtnBorder.Background = new LinearGradientBrush(
-                _okBtnC1, _okBtnC2, new Point(0, 0.5), new Point(1, 0.5));
-            OkBtnBorder.Effect = null;
+            OkBtnBorder.Background = MakeGradient(_okBtnC1, _okBtnC2);
+            OkBtnBorder.Effect     = null;
         }
 
-        private void CancelBorder_Click(object sender, MouseButtonEventArgs e) { Result = false; this.DialogResult = false; Close(); }
+        // ── Кнопка Отмена ───────────────────────────────────────────────────
 
-        // ЭФФЕКТ ДЛЯ КНОПКИ ОТМЕНА
+        private void CancelBorder_Click(object sender, MouseButtonEventArgs e)
+        {
+            Result = false;
+            DialogResult = false;
+            Close();
+        }
+
         private void CancelBorder_Enter(object sender, MouseEventArgs e)
         {
-            CancelBtnBorder.Opacity = 1.0;
-            CancelBtnBorder.Background = new LinearGradientBrush(
-                new GradientStopCollection {
-                    new GradientStop(Color.FromRgb(0x30, 0x88, 0xFF), 0.0),
-                    new GradientStop(Color.FromRgb(0x20, 0x70, 0xEE), 1.0)
-                },
-                new Point(0, 0.5), new Point(1, 0.5));
-            CancelBtnBorder.BorderBrush = new SolidColorBrush(Color.FromArgb(0x80, 0x60, 0xA0, 0xFF));
-            CancelBtnBorder.BorderThickness = new System.Windows.Thickness(1);
-            CancelBtnBorder.Effect = new System.Windows.Media.Effects.DropShadowEffect
-            {
-                Color = Color.FromRgb(0x30, 0x80, 0xFF),
-                BlurRadius = 18, ShadowDepth = 0, Opacity = 0.7
-            };
+            CancelBtnBorder.Background   = MakeGradient(CancelHoverC1, CancelHoverC2);
+            CancelBtnBorder.BorderBrush  = new SolidColorBrush(Color.FromArgb(0x80, 0x60, 0xA0, 0xFF));
+            CancelBtnBorder.BorderThickness = new Thickness(1);
+            CancelBtnBorder.Effect       = MakeGlow(CancelC1, radius: 18, opacity: 0.7);
         }
+
         private void CancelBorder_Leave(object sender, MouseEventArgs e)
         {
-            CancelBtnBorder.Opacity = 1.0;
-            CancelBtnBorder.Background = new LinearGradientBrush(
-                new GradientStopCollection {
-                    new GradientStop(Color.FromRgb(0x29, 0x79, 0xFF), 0.0),
-                    new GradientStop(Color.FromRgb(0x15, 0x65, 0xC0), 1.0)
-                },
-                new Point(0, 0.5), new Point(1, 0.5));
-            CancelBtnBorder.BorderBrush = new SolidColorBrush(Color.FromArgb(0x00, 0x00, 0x00, 0x00));
-            CancelBtnBorder.BorderThickness = new System.Windows.Thickness(0);
-            CancelBtnBorder.Effect = null;
+            CancelBtnBorder.Background      = MakeGradient(CancelC1, CancelC2);
+            CancelBtnBorder.BorderBrush     = new SolidColorBrush(Color.FromArgb(0x40, 0x4A, 0x9E, 0xFF));
+            CancelBtnBorder.BorderThickness = new Thickness(1);
+            CancelBtnBorder.Effect          = null;
         }
     }
 }

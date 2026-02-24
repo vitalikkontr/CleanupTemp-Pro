@@ -105,7 +105,7 @@
                         </Run>
                     </TextBlock>
 
-                    <TextBlock Text="Версия 3.1.0"
+                    <TextBlock Text="Версия 3.2.0"
                                FontFamily="Segoe UI" FontSize="13"
                                Foreground="#6060C0"
                                HorizontalAlignment="Center" Margin="0,0,0,22"/>

@@ -322,27 +322,8 @@
         </Style>
 
 
-        <!-- ══════════════════════════════════════════
-             WINDOW SHADOW LAYERS — переиспользуемый
-             декоратор тени для всех окон проекта.
-             Использование:
-               <ContentControl Style="{StaticResource WindowShadow}">
-                   ... основной Border окна ...
-               </ContentControl>
-        ══════════════════════════════════════════ -->
-        <Style x:Key="WindowShadow" TargetType="Grid">
-            <!-- Слои тени — три полупрозрачных Border с разным Margin и CornerRadius.
-                 Применяются в MainWindow, AboutWindow, CustomDialog.
-                 При изменении тени правим только здесь. -->
-        </Style>
-
-        <!-- Именованные тени как DataTemplate — используем в каждом окне так:
-             1й Border: Margin="14" CornerRadius="20" Background="#55000000"
-             2й Border: Margin="11" CornerRadius="18" Background="#44000000"
-             3й Border: Margin="9"  CornerRadius="17" Background="#33000000"
-             (MainWindow) или Margin=12/9/6 CornerRadius=22/20/19 (AboutWindow/Dialog)
-             Значения разные у окон — поэтому стиль параметризовать нельзя в чистом XAML,
-             оставляем комментарий для документации. -->
+        <!-- WindowShadow реализован через три слоя Border в каждом окне —
+             параметры у каждого окна свои, поэтому общий стиль не нужен -->
 
     </Application.Resources>
 </Application>

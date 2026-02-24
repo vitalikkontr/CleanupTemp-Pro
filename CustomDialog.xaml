@@ -9,7 +9,31 @@
         SnapsToDevicePixels="True"
         UseLayoutRounding="True">
 
+    <Window.Resources>
+
+        <!-- ── Стиль кнопки Отмена ── -->
+        <Style x:Key="CancelButtonStyle" TargetType="Border">
+            <Setter Property="Background">
+                <Setter.Value>
+                    <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
+                        <GradientStop Color="#2979FF" Offset="0"/>
+                        <GradientStop Color="#1565C0" Offset="1"/>
+                    </LinearGradientBrush>
+                </Setter.Value>
+            </Setter>
+            <Setter Property="BorderBrush">
+                <Setter.Value>
+                    <SolidColorBrush Color="#404A9EFF"/>
+                </Setter.Value>
+            </Setter>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Effect" Value="{x:Null}"/>
+        </Style>
+
+    </Window.Resources>
+
     <Grid>
+        <!-- Слои тени -->
         <Border Margin="12" CornerRadius="22" Background="#55000000"/>
         <Border Margin="9"  CornerRadius="20" Background="#44000000"/>
         <Border Margin="6"  CornerRadius="19" Background="#33000000"/>
@@ -23,23 +47,32 @@
             </Border.Background>
 
             <StackPanel Margin="32,28,32,28">
+
+                <!-- Иконка + Заголовок -->
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,18" VerticalAlignment="Center">
-                    <Border x:Name="IconBorder" Width="48" Height="48" CornerRadius="14" Margin="0,0,16,0" Background="#1A2A5A">
+                    <Border x:Name="IconBorder" Width="48" Height="48" CornerRadius="14"
+                            Margin="0,0,16,0" Background="#1A2A5A">
                         <TextBlock x:Name="IconText" Text="ℹ️" FontSize="22"
                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <TextBlock x:Name="TitleText" Text="Заголовок"
-                               FontFamily="Segoe UI Semibold" FontSize="18" Foreground="White"/>
+                               FontFamily="Segoe UI Semibold" FontSize="18"
+                               Foreground="White" VerticalAlignment="Center"/>
                 </StackPanel>
 
-                <TextBlock x:Name="MessageText" TextWrapping="Wrap" FontFamily="Segoe UI" 
-                           FontSize="13" Foreground="#AAAACC" LineHeight="22" Margin="0,0,0,20"/>
+                <!-- Сообщение -->
+                <TextBlock x:Name="MessageText" TextWrapping="Wrap"
+                           FontFamily="Segoe UI" FontSize="13"
+                           Foreground="#AAAACC" LineHeight="22" Margin="0,0,0,20"/>
 
-                <Border x:Name="StatsPanel" CornerRadius="12" Padding="16,12" Margin="0,0,0,24" 
-                        Visibility="Collapsed" Background="#0A0A1E" BorderBrush="#1A2A5A" BorderThickness="1">
+                <!-- Статистика -->
+                <Border x:Name="StatsPanel" CornerRadius="12" Padding="16,12"
+                        Margin="0,0,0,24" Visibility="Collapsed"
+                        Background="#0A0A1E" BorderBrush="#1A2A5A" BorderThickness="1">
                     <StackPanel x:Name="StatsStack"/>
                 </Border>
 
+                <!-- Кнопки -->
                 <Grid x:Name="BtnGrid">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
@@ -47,40 +80,39 @@
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
 
-                    <Border x:Name="CancelBtnBorder" Grid.Column="0" Height="44" CornerRadius="10"
-                            Visibility="Collapsed" Cursor="Hand" 
-                            BorderBrush="#404A9EFF" BorderThickness="1"
-                            MouseLeftButtonDown="CancelBorder_Click" 
-                            MouseEnter="CancelBorder_Enter" 
+                    <!-- Кнопка Отмена -->
+                    <Border x:Name="CancelBtnBorder" Grid.Column="0" Height="44"
+                            CornerRadius="10" Visibility="Collapsed" Cursor="Hand"
+                            Style="{StaticResource CancelButtonStyle}"
+                            MouseLeftButtonDown="CancelBorder_Click"
+                            MouseEnter="CancelBorder_Enter"
                             MouseLeave="CancelBorder_Leave">
-                        <Border.Background>
-                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                <GradientStop Color="#2979FF" Offset="0"/>
-                                <GradientStop Color="#1565C0" Offset="1"/>
-                            </LinearGradientBrush>
-                        </Border.Background>
-                        <TextBlock Text="Отмена" 
-                                   FontFamily="Segoe UI Semibold" FontSize="13" 
-                                   Foreground="White" 
+                        <TextBlock Text="Отмена"
+                                   FontFamily="Segoe UI Semibold" FontSize="13"
+                                   Foreground="White"
                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
 
-                    <Border x:Name="OkBtnBorder" Grid.Column="0" Grid.ColumnSpan="3" Height="44" 
-                            CornerRadius="10" Cursor="Hand" 
-                            MouseLeftButtonDown="OkBorder_Click" 
-                            MouseEnter="OkBorder_Enter" MouseLeave="OkBorder_Leave"
-                            BorderThickness="0">
+                    <!-- Кнопка OK (фон устанавливается из code-behind по DialogKind) -->
+                    <Border x:Name="OkBtnBorder" Grid.Column="0" Grid.ColumnSpan="3"
+                            Height="44" CornerRadius="10" Cursor="Hand"
+                            BorderThickness="0"
+                            MouseLeftButtonDown="OkBorder_Click"
+                            MouseEnter="OkBorder_Enter"
+                            MouseLeave="OkBorder_Leave">
                         <Border.Background>
-                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                            <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
                                 <GradientStop Color="#2979FF" Offset="0"/>
                                 <GradientStop Color="#AA00FF" Offset="1"/>
                             </LinearGradientBrush>
                         </Border.Background>
-                        <TextBlock x:Name="OkBtnText" Text="ОК" FontFamily="Segoe UI Semibold" 
-                                   FontSize="14" FontWeight="Bold" Foreground="White"
+                        <TextBlock x:Name="OkBtnText" Text="ОК"
+                                   FontFamily="Segoe UI Semibold" FontSize="14"
+                                   FontWeight="Bold" Foreground="White"
                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                 </Grid>
+
             </StackPanel>
         </Border>
     </Grid>
