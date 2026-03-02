@@ -1,4 +1,4 @@
-<div align="center"><img width="1160" height="820" alt="2026-02-24_083443" src="https://github.com/user-attachments/assets/0a41a5a7-b999-4c8d-a77a-d2b3a2678922" />
+<div align="center"><img width="1160" height="820" alt="2026-03-02_113744" src="https://github.com/user-attachments/assets/8bcc5529-4b11-4263-9c0a-e594d2568f79" />
 
 # Мощная и удобная утилита для безопасной очистки временных файлов и кэша. Идеальна для поддержания чистоты системы и экономии места на дисках. Чистит лучше чем другие! 🧹
  
@@ -51,7 +51,7 @@
 ## 📥 Установка
 
 1. [Скачайте последнюю версию](https://github.com/vitalikkontr/CleanupTemp-Pro/releases/latest)
-2. Запустите установщик CleanupTemp-Pro-Setup-v3.2.0.exe
+2. Запустите установщик CleanupTemp-Pro-Setup-v3.2.1.exe
 3. Следуйте инструкциям мастера установки
 
 ### Сборка и запуск
