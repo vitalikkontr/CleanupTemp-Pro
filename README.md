@@ -1,4 +1,4 @@
-<div align="center"><img width="1160" height="820" alt="2026-03-02_113744" src="https://github.com/user-attachments/assets/8bcc5529-4b11-4263-9c0a-e594d2568f79" />
+<div align="center"><img width="1160" height="820" alt="2026-03-02_113744" src="https://github.com/user-attachments/assets/9da86549-00cd-4200-957f-6798d4ee7216" />
 
 # Мощная и удобная утилита для безопасной очистки временных файлов и кэша. Идеальна для поддержания чистоты системы и экономии места на дисках. Чистит лучше чем другие! 🧹
  
