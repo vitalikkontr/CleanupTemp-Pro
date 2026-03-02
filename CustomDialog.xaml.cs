@@ -6,6 +6,17 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
 
+// Алиасы: разрешаем конфликты WPF ↔ WinForms (UseWindowsForms=true в .csproj)
+using Color               = System.Windows.Media.Color;
+using MouseEventArgs      = System.Windows.Input.MouseEventArgs;
+using Application         = System.Windows.Application;
+using Point               = System.Windows.Point;
+using Brushes             = System.Windows.Media.Brushes;
+using Brush               = System.Windows.Media.Brush;
+using ColorConverter      = System.Windows.Media.ColorConverter;
+using VerticalAlignment   = System.Windows.VerticalAlignment;
+using HorizontalAlignment = System.Windows.HorizontalAlignment;
+
 namespace CleanupTemp_Pro
 {
     public enum DialogKind { Info, Success, Warning, Confirm, Error }
@@ -153,10 +164,18 @@ namespace CleanupTemp_Pro
         // ── Вспомогательные методы ──────────────────────────────────────────
 
         private static LinearGradientBrush MakeGradient(Color c1, Color c2)
-            => new(c1, c2, new Point(0, 0.5), new Point(1, 0.5));
+        {
+            var b = new LinearGradientBrush(c1, c2, new Point(0, 0.5), new Point(1, 0.5));
+            b.Freeze();
+            return b;
+        }
 
         private static DropShadowEffect MakeGlow(Color color, double radius = 35, double opacity = 0.9)
-            => new() { Color = color, BlurRadius = radius, ShadowDepth = 0, Opacity = opacity };
+        {
+            var e = new DropShadowEffect { Color = color, BlurRadius = radius, ShadowDepth = 0, Opacity = opacity };
+            e.Freeze();
+            return e;
+        }
 
         /// <summary>Безопасно парсит цвет из строки. Возвращает fallback при ошибке.</summary>
         private static Color TryParseColor(string hex, Color fallback)
@@ -176,7 +195,7 @@ namespace CleanupTemp_Pro
 
         private void OkBorder_Enter(object sender, MouseEventArgs e)
         {
-            OkBtnBorder.Background = new LinearGradientBrush(
+            var hoverBrush = new LinearGradientBrush(
                 new GradientStopCollection
                 {
                     new GradientStop(_okBtnC1, 0.0),
@@ -187,7 +206,9 @@ namespace CleanupTemp_Pro
                     new GradientStop(_okBtnC2, 1.0)
                 },
                 new Point(0, 0.5), new Point(1, 0.5));
+            hoverBrush.Freeze();
 
+            OkBtnBorder.Background = hoverBrush;
             OkBtnBorder.Effect = MakeGlow(_okBtnC1);
         }
 

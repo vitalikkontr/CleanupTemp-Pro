@@ -1,16 +1,19 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <!-- NotifyIcon живёт в System.Windows.Forms — подключаем WinForms рядом с WPF.
+         Это не превращает проект в WinForms: мы используем ровно один класс. -->
+    <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>CleanupTemp_Pro</AssemblyName>
     <RootNamespace>CleanupTemp_Pro</RootNamespace>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationIcon>app.ico</ApplicationIcon>
     <PlatformTarget>x64</PlatformTarget>
-    <AssemblyVersion>3.2.0</AssemblyVersion>
-    <FileVersion>3.2.0</FileVersion>
+    <AssemblyVersion>3.2.1</AssemblyVersion>
+    <FileVersion>3.2.1</FileVersion>
     <!-- Манифест с правами администратора — необходим для остановки служб
          и удаления файлов из C:\Windows\SoftwareDistribution\ -->
     <ApplicationManifest>app.manifest</ApplicationManifest>

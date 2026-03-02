@@ -1,8 +1,8 @@
 [Setup]
 AppId={{7F49CBC0-9540-455B-B05E-78FD14DFCE6B}}
 AppName=Cleanup Temp Pro
-AppVersion=3.2.0
-AppVerName=Cleanup Temp Pro 3.2.0
+AppVersion=3.2.1
+AppVerName=Cleanup Temp Pro 3.2.1
 AppPublisher=Виталий Николаевич (vitalikkontr)
 AppPublisherURL=https://github.com/vitalikkontr/CleanupTemp-Pro
 AppSupportURL=https://github.com/vitalikkontr/CleanupTemp-Pro/issues
@@ -12,7 +12,7 @@ DefaultDirName={autopf}\Cleanup Temp Professional
 DefaultGroupName=Cleanup Temp
 DisableProgramGroupPage=yes
 OutputDir=C:\Release\Setup
-OutputBaseFilename=CleanupTemp-Professional-Setup-v3.2.0
+OutputBaseFilename=CleanupTemp-Professional-Setup-v3.2.1
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -33,7 +33,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "autostart"; Description: "Запускать при старте Windows"; GroupDescription: "Дополнительные опции:"; Flags: unchecked
 
 [Files]
-Source: "C:\Users\vital\source\repos\CleanupTemp_Pro\bin\Release\net8.0-windows10.0.19041.0\win-x64\*.*"; DestDir: "{app}"; Flags:ignoreversion recursesubdirs createallsubdirs
+Source: "C:\Users\vital\source\repos\CleanupTemp_Pro\bin\Release\net8.0-windows\win-x64\*.*"; DestDir: "{app}"; Flags:ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\Cleanup Temp"; Filename: "{app}\CleanupTemp_Pro.exe"
@@ -71,7 +71,7 @@ begin
   begin
     if MsgBox('Приложение CleanupTemp запущено. Закрыть его для продолжения?', mbConfirmation, MB_YESNO) = IDYES then
     begin
-      Exec('taskkill.exe', '/F /IM CleanupTemp.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      Exec('taskkill.exe', '/F /IM CleanupTemp_Pro.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     end
     else
       Result := False;

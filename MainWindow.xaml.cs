@@ -19,6 +19,24 @@ using System.Windows.Media.Imaging;
 using System.Windows.Interop;
 using System.Windows.Threading;
 
+// ── Алиасы: разрешаем конфликты WPF ↔ WinForms ──────────────────────────
+// UseWindowsForms=true в .csproj делает видимыми System.Drawing и
+// System.Windows.Forms. Для каждого конфликтующего типа явно фиксируем
+// WPF-версию — остальной код файла остаётся без изменений.
+using Color                = System.Windows.Media.Color;
+using FontFamily           = System.Windows.Media.FontFamily;
+using MouseEventArgs       = System.Windows.Input.MouseEventArgs;
+using CheckBox             = System.Windows.Controls.CheckBox;
+using Application          = System.Windows.Application;
+using Point                = System.Windows.Point;
+using Orientation          = System.Windows.Controls.Orientation;
+using FontStyle            = System.Windows.FontStyle;
+using ColorConverter       = System.Windows.Media.ColorConverter;
+using Brushes              = System.Windows.Media.Brushes;
+using Brush                = System.Windows.Media.Brush;
+using HorizontalAlignment  = System.Windows.HorizontalAlignment;
+using VerticalAlignment    = System.Windows.VerticalAlignment;
+
 namespace CleanupTemp_Pro
 {
     // ══════════════════════════════════════════════════════════════════
@@ -42,6 +60,42 @@ namespace CleanupTemp_Pro
         public string Icon      { get; set; } = "✅";
     }
 
+    /// <summary>Элемент белого списка — путь файла или папки, исключённый из очистки.</summary>
+    public class ExclusionItem
+    {
+        public string Path { get; set; } = "";
+        /// <summary>📁 для папки, 📄 для файла, 🔒 для ручного ввода.</summary>
+        public string Icon { get; set; } = "🔒";
+    }
+
+    /// <summary>Файл для вкладки «Большие файлы».</summary>
+    public class LargeFileItem
+    {
+        public string Icon     { get; set; } = "📦";
+        public string Path     { get; set; } = "";
+        public string FileName { get; set; } = "";
+        public string Category { get; set; } = "";
+        public long   SizeBytes { get; set; }
+        public string SizeText  => SizeHelper.Format(SizeBytes);
+    }
+
+    /// <summary>Сегмент круговой диаграммы очистки.</summary>
+    public class ChartSegment
+    {
+        public string   Category  { get; set; } = "";
+        public long     SizeBytes { get; set; }
+        public double   Pct       { get; set; }   // 0..1
+        public string   PctText   => $"{Pct * 100:F1}%";
+        public string   SizeText  => SizeHelper.Format(SizeBytes);
+        public string   HexColor  { get; set; } = "#888888";
+        /// <summary>Кисть для биндинга в XAML DataTemplate.</summary>
+        public SolidColorBrush ColorBrush =>
+            new(Color.FromRgb(
+                Convert.ToByte(HexColor.Substring(1, 2), 16),
+                Convert.ToByte(HexColor.Substring(3, 2), 16),
+                Convert.ToByte(HexColor.Substring(5, 2), 16)));
+    }
+
     public static class SizeHelper
     {
         public static string Format(long b)
@@ -59,12 +113,31 @@ namespace CleanupTemp_Pro
 
     public sealed class BulkObservableCollection<T> : ObservableCollection<T>
     {
+        /// <summary>
+        /// Добавляет элементы без уведомления на каждый элемент.
+        /// Бросает одно Reset-уведомление в конце.
+        /// Для виртуализированного ListView Reset вызывает пересчёт — 
+        /// поэтому используем только когда батч > 50 элементов.
+        /// </summary>
         public void AddRange(IEnumerable<T> items)
         {
-            foreach (var item in items)
-                Items.Add(item);
-            OnCollectionChanged(new System.Collections.Specialized.NotifyCollectionChangedEventArgs(
-                System.Collections.Specialized.NotifyCollectionChangedAction.Reset));
+            var list = items as IList<T> ?? items.ToList();
+            if (list.Count == 0) return;
+
+            if (list.Count <= 50)
+            {
+                // Небольшой батч — добавляем по одному (виртуализация работает лучше)
+                foreach (var item in list)
+                    Add(item);
+            }
+            else
+            {
+                // Большой батч — без лишних уведомлений, одно Reset в конце
+                foreach (var item in list)
+                    Items.Add(item);
+                OnCollectionChanged(new System.Collections.Specialized.NotifyCollectionChangedEventArgs(
+                    System.Collections.Specialized.NotifyCollectionChangedAction.Reset));
+            }
         }
     }
 
@@ -138,6 +211,20 @@ namespace CleanupTemp_Pro
         private CancellationTokenSource? _cts;
         private readonly BulkObservableCollection<FileItem> _fileItems    = new();
         private readonly ObservableCollection<HistoryItem>  _historyItems = new();
+        // Полный список для очистки — не ограничен 5000 как _fileItems (только для отображения)
+        private readonly List<FileItem> _allFoundItems = new();
+
+        // ── Белый список исключений ───────────────────────────────────
+        // HashSet для O(1) проверки при сканировании тысяч файлов
+        private HashSet<string> _excludePaths = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ObservableCollection<ExclusionItem> _exclusionItems = new();
+        private static readonly string ExclusionsPath = System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "CleanupTempPro", "exclusions.json");
+
+        // ── Большие файлы ─────────────────────────────────────────────
+        private readonly BulkObservableCollection<LargeFileItem> _largeFileItems = new();
+        private CancellationTokenSource? _largeScanCts;
 
         // Флаги выполнения — читаются и пишутся только на UI потоке (async void гарантирует это)
         // Два отдельных флага чтобы сканирование и очистка не мешали друг другу
@@ -222,64 +309,71 @@ namespace CleanupTemp_Pro
             ".dat", ".jfm", ".db-wal", ".db-shm", ".sqlite", ".sqlite-wal", ".sqlite-shm"
         };
 
-        // Количество потоков — определяем один раз при старте через WMI
+        // Количество потоков — стартуем с безопасного дефолта (2),
+        // WMI-запрос уточняет значение асинхронно после старта окна.
+        // volatile гарантирует видимость обновления во всех потоках.
         // SSD/NVMe → 4 потока, HDD → 1 поток, неизвестно → 2 потока
-        private static readonly int _optimalThreadCount = GetOptimalThreadCount();
-        private static readonly int ScanDegree  = _optimalThreadCount;
-        private static readonly int CleanDegree = _optimalThreadCount;
+        private static volatile int ScanDegree  = 2;
+        private static volatile int CleanDegree = 2;
 
         /// <summary>
-        /// Определяет оптимальное количество потоков для файловых операций
-        /// на основе типа системного диска (C:) через WMI Storage API.
-        /// MediaType: 3 = HDD, 4 = SSD, 5 = SCM (Storage Class Memory)
-        /// Возвращает 4 для SSD/NVMe/неизвестно, 1 для HDD.
+        /// Запускает определение типа диска (SSD/HDD) через WMI в фоновом потоке.
+        /// Вызывается один раз из конструктора — не блокирует UI ни на миллисекунду.
+        /// По завершении обновляет ScanDegree и CleanDegree (volatile, видны всем потокам).
+        /// Если WMI занят/недоступен — поля остаются на безопасном дефолте (2 потока).
         /// </summary>
-        private static int GetOptimalThreadCount()
+        private static void InitThreadCountAsync()
         {
-            try
+            _ = Task.Run(() =>
             {
-                var scope = new System.Management.ManagementScope(
-                    @"\\.\root\microsoft\windows\storage");
-                scope.Connect();
-
-                string sysRoot = Path.GetPathRoot(
-                    Environment.GetFolderPath(Environment.SpecialFolder.System)) ?? @"C:\";
-                string driveLetter = sysRoot.TrimEnd('\\'); // "C:"
-
-                using var partQuery = new System.Management.ManagementObjectSearcher(
-                    scope,
-                    new System.Management.ObjectQuery(
-                        $"SELECT DiskNumber FROM MSFT_Partition WHERE DriveLetter='{driveLetter[0]}'"));
-
-                foreach (System.Management.ManagementObject part in partQuery.Get())
+                try
                 {
-                    uint diskNumber = (uint)part["DiskNumber"];
+                    var scope = new System.Management.ManagementScope(
+                        @"\\.\root\microsoft\windows\storage");
+                    scope.Connect();
 
-                    using var diskQuery = new System.Management.ManagementObjectSearcher(
+                    string sysRoot = Path.GetPathRoot(
+                        Environment.GetFolderPath(Environment.SpecialFolder.System)) ?? @"C:\";
+                    string driveLetter = sysRoot.TrimEnd('\\'); // "C:"
+
+                    using var partQuery = new System.Management.ManagementObjectSearcher(
                         scope,
                         new System.Management.ObjectQuery(
-                            $"SELECT MediaType FROM MSFT_PhysicalDisk WHERE DeviceId='{diskNumber}'"));
+                            $"SELECT DiskNumber FROM MSFT_Partition WHERE DriveLetter='{driveLetter[0]}'"));
 
-                    foreach (System.Management.ManagementObject disk in diskQuery.Get())
+                    foreach (System.Management.ManagementObject part in partQuery.Get())
                     {
-                        uint mediaType = (uint)disk["MediaType"];
-                        // 3 = HDD, 4 = SSD, 5 = SCM, 0 = Unknown
-                        bool isSsd = mediaType != 3;
-                        int threads = isSsd ? Math.Min(4, Environment.ProcessorCount) : 1;
-                        AppLog.Info($"Drive {driveLetter}: MediaType={mediaType} " +
-                                    $"→ {(isSsd ? "SSD" : "HDD")}, threads={threads}");
-                        return threads;
+                        uint diskNumber = (uint)part["DiskNumber"];
+
+                        using var diskQuery = new System.Management.ManagementObjectSearcher(
+                            scope,
+                            new System.Management.ObjectQuery(
+                                $"SELECT MediaType FROM MSFT_PhysicalDisk WHERE DeviceId='{diskNumber}'"));
+
+                        foreach (System.Management.ManagementObject disk in diskQuery.Get())
+                        {
+                            uint mediaType = (uint)disk["MediaType"];
+                            // 3 = HDD, 4 = SSD, 5 = SCM (Storage Class Memory), 0 = Unknown
+                            bool isSsd  = mediaType != 3;
+                            int threads = isSsd ? Math.Min(4, Environment.ProcessorCount) : 1;
+                            // Атомарно обновляем оба поля — следующий вызов Scan/Clean
+                            // уже получит правильное значение
+                            ScanDegree  = threads;
+                            CleanDegree = threads;
+                            AppLog.Info($"WMI async: Drive {driveLetter}: MediaType={mediaType} " +
+                                        $"→ {(isSsd ? "SSD" : "HDD")}, threads={threads}");
+                            return;
+                        }
                     }
+                    // WMI ответил, но диск не найден — оставляем дефолт 2
+                    AppLog.Warn("WMI async: system disk not found in MSFT_Partition — keeping 2 threads");
                 }
-            }
-            catch (Exception ex)
-            {
-                // WMI недоступен или нет прав — безопасный дефолт
-                AppLog.Warn($"GetOptimalThreadCount WMI failed: {ex.Message} — using 2 threads");
-            }
-            // Дефолт если WMI не ответил: 2 потока
-            // (не так агрессивно как 4 на HDD, но быстрее чем 1)
-            return 2;
+                catch (Exception ex)
+                {
+                    // WMI недоступен / нет прав / зависание → дефолт 2 уже стоит, ничего менять не нужно
+                    AppLog.Warn($"WMI async failed: {ex.Message} — keeping 2 threads");
+                }
+            });
         }
 
         // ── Вспомогательные методы ────────────────────────────────────
@@ -293,6 +387,24 @@ namespace CleanupTemp_Pro
                 if (_protectedFolderNames.Contains(part) ||
                     _protectedTempSubfolders.Contains(part))
                     return true;
+            return false;
+        }
+
+        /// <summary>
+        /// Проверяет, попадает ли файл под белый список пользователя.
+        /// Сравниваем как точное совпадение (файл), так и «начинается с» (папка).
+        /// </summary>
+        private bool IsExcluded(string filePath)
+        {
+            // Точное совпадение — файл явно добавлен в исключения
+            if (_excludePaths.Contains(filePath)) return true;
+            // Папка в исключениях — пропускаем всё, что в ней лежит
+            foreach (var ex in _excludePaths)
+            {
+                if (filePath.StartsWith(ex + System.IO.Path.DirectorySeparatorChar,
+                                        StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
             return false;
         }
 
@@ -360,6 +472,22 @@ namespace CleanupTemp_Pro
             }
             catch (Exception ex) { AppLog.Error("SaveSettings failed", ex); }
         }
+
+        // Снимок галочек — CheckBox.IsChecked нельзя читать вне UI потока
+        private record ScanOptions(
+            bool TempFiles, bool WinTemp, bool BrowserCache, bool Prefetch,
+            bool Thumbnails, bool DnsCache, bool MSOffice, bool EventLogs, bool ExternalDrives);
+
+        private ScanOptions ReadScanOptions() => new(
+            TempFiles     : ChkTempFiles?.IsChecked      == true,
+            WinTemp       : ChkWinTemp?.IsChecked        == true,
+            BrowserCache  : ChkBrowserCache?.IsChecked   == true,
+            Prefetch      : ChkPrefetch?.IsChecked       == true,
+            Thumbnails    : ChkThumbnails?.IsChecked     == true,
+            DnsCache      : ChkDnsCache?.IsChecked       == true,
+            MSOffice      : ChkMSOffice?.IsChecked       == true,
+            EventLogs     : ChkEventLogs?.IsChecked      == true,
+            ExternalDrives: ChkExternalDrives?.IsChecked == true);
 
         private bool _settingsLoaded = false;
 
@@ -473,12 +601,15 @@ namespace CleanupTemp_Pro
         public MainWindow()
         {
             InitializeComponent();
-            FileListView.ItemsSource    = _fileItems;
-            HistoryListView.ItemsSource = _historyItems;
+            FileListView.ItemsSource       = _fileItems;
+            HistoryListView.ItemsSource    = _historyItems;
+            LargeFilesListView.ItemsSource = _largeFileItems;
+            ExclusionsListView.ItemsSource = _exclusionItems;
             LoadLogo();
             LoadDiskInfo();
             LoadSettings();
             LoadHistory();
+            LoadExclusions();
             SetStatus("Готов к работе", StatusKind.Ready);
             StartPulse();
             SourceInitialized += (_, _) => InitUsbDetection();
@@ -486,9 +617,18 @@ namespace CleanupTemp_Pro
             {
                 SaveSettings();
                 SaveHistory();
+                SaveExclusions();
                 _hwndSource?.RemoveHook(WndProc);
                 _hwndSource?.Dispose();
+                // OnExplicitShutdown + NotifyIcon держат процесс живым после Close().
+                // Явный Shutdown() завершает WPF dispatcher и убивает NotifyIcon loop.
+                Application.Current.Shutdown();
             };
+            // WMI-запрос к диску — строго в фоне, не блокирует UI при старте.
+            // Обновит ScanDegree/CleanDegree до начала первого сканирования.
+            InitThreadCountAsync();
+            // Перехват сворачивания: Hide() вместо Minimize — окно уходит в трей
+            StateChanged += MainWindow_StateChanged;
             AppLog.Info("CleanupTemp Pro started");
         }
 
@@ -546,33 +686,61 @@ namespace CleanupTemp_Pro
         private readonly FontFamily _fontSemibold = new("Segoe UI Semibold");
         private readonly FontFamily _fontRegular  = new("Segoe UI");
 
-        private void SwitchTab(bool showHistory)
-        {
-            _showingHistory = showHistory;
-            FilesPanel.Visibility   = showHistory ? Visibility.Collapsed : Visibility.Visible;
-            HistoryPanel.Visibility = showHistory ? Visibility.Visible   : Visibility.Collapsed;
+        private enum ActiveTab { Files, History, Large, Exclusions }
 
-            if (showHistory)
+        private void SwitchTab(ActiveTab tab)
+        {
+            _showingHistory = (tab == ActiveTab.History);
+
+            FilesPanel.Visibility      = tab == ActiveTab.Files      ? Visibility.Visible : Visibility.Collapsed;
+            HistoryPanel.Visibility    = tab == ActiveTab.History    ? Visibility.Visible : Visibility.Collapsed;
+            LargeFilesPanel.Visibility = tab == ActiveTab.Large      ? Visibility.Visible : Visibility.Collapsed;
+            ExclusionsPanel.Visibility = tab == ActiveTab.Exclusions ? Visibility.Visible : Visibility.Collapsed;
+
+            void Reset(Border hdr, TextBlock txt)
             {
-                TabHistoryHeader.Background = new SolidColorBrush(Color.FromRgb(0x1A, 0x2A, 0x4A));
-                TabHistoryText.Foreground   = new SolidColorBrush(Color.FromRgb(0x4A, 0x9E, 0xFF));
-                TabHistoryText.FontFamily   = _fontSemibold;
-                TabFilesHeader.Background   = Brushes.Transparent;
-                TabFilesText.Foreground     = (Brush)FindResource("TextSecondaryBrush");
-                TabFilesText.FontFamily     = _fontRegular;
-                ListCountLabel.Text         = $"{_historyItems.Count} записей";
+                hdr.Background = Brushes.Transparent;
+                txt.Foreground = (Brush)FindResource("TextSecondaryBrush");
+                txt.FontFamily = _fontRegular;
             }
-            else
+            Reset(TabFilesHeader,      TabFilesText);
+            Reset(TabHistoryHeader,    TabHistoryText);
+            Reset(TabLargeHeader,      TabLargeText);
+            Reset(TabExclusionsHeader, TabExclusionsText);
+
+            void Activate(Border hdr, TextBlock txt)
             {
-                TabFilesHeader.Background   = new SolidColorBrush(Color.FromRgb(0x1A, 0x2A, 0x4A));
-                TabFilesText.Foreground     = new SolidColorBrush(Color.FromRgb(0x4A, 0x9E, 0xFF));
-                TabFilesText.FontFamily     = _fontSemibold;
-                TabHistoryHeader.Background = Brushes.Transparent;
-                TabHistoryText.Foreground   = (Brush)FindResource("TextSecondaryBrush");
-                TabHistoryText.FontFamily   = _fontRegular;
-                ListCountLabel.Text         = _fileItems.Count > 0 ? $"{_fileItems.Count} объектов" : "";
+                hdr.Background = new SolidColorBrush(Color.FromRgb(0x1A, 0x2A, 0x4A));
+                txt.Foreground = new SolidColorBrush(Color.FromRgb(0x4A, 0x9E, 0xFF));
+                txt.FontFamily = _fontSemibold;
+            }
+
+            switch (tab)
+            {
+                case ActiveTab.Files:
+                    Activate(TabFilesHeader, TabFilesText);
+                    ListCountLabel.Text = _fileItems.Count > 0 ? $"{_fileItems.Count} объектов" : "";
+                    break;
+                case ActiveTab.History:
+                    Activate(TabHistoryHeader, TabHistoryText);
+                    ListCountLabel.Text = $"{_historyItems.Count} записей";
+                    break;
+                case ActiveTab.Large:
+                    Activate(TabLargeHeader, TabLargeText);
+                    ListCountLabel.Text = _largeFileItems.Count > 0
+                        ? $"{_largeFileItems.Count} файлов" : "";
+                    break;
+                case ActiveTab.Exclusions:
+                    Activate(TabExclusionsHeader, TabExclusionsText);
+                    ListCountLabel.Text = _exclusionItems.Count > 0
+                        ? $"{_exclusionItems.Count} исключений" : "нет исключений";
+                    break;
             }
         }
+
+        // Совместимость со старым вызовом SwitchTab(false) при старте сканирования
+        private void SwitchTab(bool showHistory)
+            => SwitchTab(showHistory ? ActiveTab.History : ActiveTab.Files);
 
         private void StartPulse()
         {
@@ -710,6 +878,17 @@ namespace CleanupTemp_Pro
             };
             if (ColorConverter.ConvertFromString(hex) is Color c)
                 StatusDotColor.Color = c;
+
+            // Синхронизируем трей — маппинг StatusKind → TrayStatus
+            TrayStatus tray = kind switch
+            {
+                StatusKind.Scanning => TrayStatus.Scanning,
+                StatusKind.Cleaning => TrayStatus.Cleaning,
+                StatusKind.Done     => TrayStatus.Done,
+                StatusKind.Stopped  => TrayStatus.Stopped,
+                _                   => TrayStatus.Ready,
+            };
+            NotifyTray(tray, kind == StatusKind.Done ? text : null);
         }
 
         private void SetProgress(double pct, string label)
@@ -718,9 +897,8 @@ namespace CleanupTemp_Pro
             ProgressPercent.Text = $"{pct:F0}%";
             double w      = ProgressBarContainer.ActualWidth > 0 ? ProgressBarContainer.ActualWidth : 600;
             double target = Math.Clamp(w * pct / 100.0, 0, w);
-            ProgressBarFill.BeginAnimation(FrameworkElement.WidthProperty,
-                new DoubleAnimation(target, TimeSpan.FromMilliseconds(200))
-                { EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut } });
+            // Прямое присвоение вместо анимации — анимация при частых обновлениях грузит UI поток
+            ProgressBarFill.Width = target;
         }
 
         private void SetUiRunning(bool running, bool hasFiles = false)
@@ -893,21 +1071,21 @@ namespace CleanupTemp_Pro
         //  ПУТИ СКАНИРОВАНИЯ
         // ══════════════════════════════════════════════════════════════
 
-        private List<(string Path, string Cat, string Icon)> GetScanPaths()
+        private static List<(string Path, string Cat, string Icon)> GetScanPaths(ScanOptions opt)
         {
             var L = new List<(string, string, string)>();
             string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
 
-            if (ChkTempFiles?.IsChecked == true)
+            if (opt.TempFiles)
                 L.Add((System.IO.Path.GetTempPath(), "Temp (пользователь)", "🗂️"));
 
-            if (ChkWinTemp?.IsChecked == true)
+            if (opt.WinTemp)
             {
                 L.Add((@"C:\Windows\Temp", "Windows Temp", "⚙️"));
                 L.Add((@"C:\Windows\SoftwareDistribution\Download", "Windows Update кэш", "⚙️"));
             }
 
-            if (ChkBrowserCache?.IsChecked == true)
+            if (opt.BrowserCache)
             {
                 foreach (var p in GetChromeProfiles(local))
                     AddBrowserCachePaths(L, p, "Chrome");
@@ -936,22 +1114,22 @@ namespace CleanupTemp_Pro
                     AddBrowserCachePaths(L, p, "Vivaldi");
             }
 
-            if (ChkPrefetch?.IsChecked == true)
+            if (opt.Prefetch)
                 L.Add((@"C:\Windows\Prefetch", "Prefetch", "⚡"));
 
-            if (ChkThumbnails?.IsChecked == true)
+            if (opt.Thumbnails)
                 L.Add((System.IO.Path.Combine(local, @"Microsoft\Windows\Explorer"), "Thumbnails кэш", "🖼️"));
 
-            if (ChkDnsCache?.IsChecked == true)
+            if (opt.DnsCache)
                 L.Add((System.IO.Path.Combine(local, @"Microsoft\Windows\INetCache"), "IE/Edge Legacy Cache", "🔗"));
 
-            if (ChkMSOffice?.IsChecked == true)
+            if (opt.MSOffice)
             {
                 L.Add((System.IO.Path.Combine(local, @"Microsoft\Office\16.0\OfficeFileCache"),   "Office кэш",      "📎"));
                 L.Add((System.IO.Path.Combine(local, @"Microsoft\Office\16.0\OfficeFileCache\0"), "Office FileCache", "📎"));
             }
 
-            if (ChkExternalDrives?.IsChecked == true)
+            if (opt.ExternalDrives)
                 L.AddRange(GetExternalDrivePaths());
 
             return L;
@@ -1013,10 +1191,16 @@ namespace CleanupTemp_Pro
                     string label  = string.IsNullOrWhiteSpace(drive.VolumeLabel)
                                   ? letter : $"{drive.VolumeLabel} ({letter})";
 
+                    // Directory.Exists на HDD/USB может зависнуть на секунды
                     void TryAdd(string path, string cat, string? ic = null)
                     {
-                        if (Directory.Exists(path))
-                            result.Add((path, cat, ic ?? icon));
+                        try
+                        {
+                            var t = Task.Run(() => Directory.Exists(path));
+                            if (t.Wait(TimeSpan.FromSeconds(2)) && t.Result)
+                                result.Add((path, cat, ic ?? icon));
+                        }
+                        catch { }
                     }
 
                     TryAdd(System.IO.Path.Combine(root, "$RECYCLE.BIN"), $"Корзина {label}", "🗑️");
@@ -1030,7 +1214,14 @@ namespace CleanupTemp_Pro
                     if (!Directory.Exists(usersRoot)) continue;
 
                     string[] skipUsers = { "Public", "Default", "All Users", "Default User" };
-                    foreach (var userDir in Directory.GetDirectories(usersRoot))
+                    string[] userDirs;
+                    try
+                    {
+                        var t = Task.Run(() => Directory.GetDirectories(usersRoot));
+                        userDirs = t.Wait(TimeSpan.FromSeconds(3)) ? t.Result : Array.Empty<string>();
+                    }
+                    catch { userDirs = Array.Empty<string>(); }
+                    foreach (var userDir in userDirs)
                     {
                         string uName = System.IO.Path.GetFileName(userDir);
                         if (Array.Exists(skipUsers, s =>
@@ -1085,6 +1276,7 @@ namespace CleanupTemp_Pro
             _isScanning = true;
 
             _fileItems.Clear();
+            _allFoundItems.Clear();
             _totalFoundBytes = 0;
             _statTemp = _statBrowser = _statRecycle = 0;
             StatTempFiles.Text = StatBrowserFiles.Text = StatRecycleBin.Text = "0";
@@ -1102,12 +1294,16 @@ namespace CleanupTemp_Pro
             oldCts?.Dispose();
             SetUiRunning(true);
 
-            var paths       = GetScanPaths();
+            // Читаем все CheckBox на UI потоке — в Task.Run они недоступны
+            var scanOpt     = ReadScanOptions();
             bool doRecycle  = ChkRecycleBin?.IsChecked  == true;
-            bool doEventLog = ChkEventLogs?.IsChecked   == true;
             var token       = _cts.Token;
 
-            AppLog.Info($"Scan started: {paths.Count} dirs, recycle={doRecycle}, eventlog={doEventLog}");
+            // GetScanPaths содержит Directory.Exists на внешних дисках — выносим в фон
+            SetProgress(0, "Составляю список папок...");
+            var paths = await Task.Run(() => GetScanPaths(scanOpt));
+
+            AppLog.Info($"Scan started: {paths.Count} dirs, recycle={doRecycle}, eventlog={scanOpt.EventLogs}");
             var sw = Stopwatch.StartNew();
 
             bool wuActive = false;
@@ -1129,6 +1325,7 @@ namespace CleanupTemp_Pro
                         CancellationToken      = CancellationToken.None  // не прерываем Parallel сам по себе
                     };
 
+                    int lastScanProgress = 0;
                     Parallel.ForEach(paths, scanOpts, item =>
                     {
                         if (token.IsCancellationRequested) return;
@@ -1137,8 +1334,11 @@ namespace CleanupTemp_Pro
 
                         int idx = Interlocked.Increment(ref done);
                         int p   = total > 0 ? (int)(idx * 100.0 / total) : 0;
-                        Dispatcher.InvokeAsync(() => SetProgress(p, $"Сканирование... {p}%"),
-                            DispatcherPriority.Background);
+                        // Прогресс только вперёд — параллельные потоки могут финишировать не по порядку
+                        int prev = Interlocked.Exchange(ref lastScanProgress, p);
+                        if (p > prev)
+                            Dispatcher.InvokeAsync(() => SetProgress(p, $"Сканирование... {p}%"),
+                                DispatcherPriority.Background);
                     });
 
                     if (doRecycle && !token.IsCancellationRequested)
@@ -1147,7 +1347,7 @@ namespace CleanupTemp_Pro
                         ScanRecycleBin();
                     }
 
-                    if (doEventLog && !token.IsCancellationRequested)
+                    if (scanOpt.EventLogs && !token.IsCancellationRequested)
                     {
                         Dispatcher.Invoke(() => SetProgress(97, "Проверяю логи событий..."));
                         var channels      = GetEventLogChannels();
@@ -1167,8 +1367,8 @@ namespace CleanupTemp_Pro
                                     SizeBytes = totalLogBytes
                                 });
                                 TotalSizeText.Text  = SizeHelper.Format(_totalFoundBytes);
-                                FileCountText.Text  = $"{_fileItems.Count} объектов";
-                                ListCountLabel.Text = $"{_fileItems.Count} объектов";
+                                FileCountText.Text  = $"{_allFoundItems.Count} объектов";
+                                ListCountLabel.Text = $"{_allFoundItems.Count} объектов";
                                 StatTempFiles.Text  = _statTemp.ToString();
                             });
                         }
@@ -1181,7 +1381,7 @@ namespace CleanupTemp_Pro
             {
                 // finally у async void всегда на UI потоке после await — Dispatcher не нужен
                 _isScanning = false;
-                SetUiRunning(false, _fileItems.Count > 0);
+                SetUiRunning(false, _allFoundItems.Count > 0);
             }
 
             bool wasCancelled = _cts?.IsCancellationRequested == true;
@@ -1197,15 +1397,15 @@ namespace CleanupTemp_Pro
             await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Background);
 
             AppLog.Info($"Scan done in {sw.Elapsed.TotalSeconds:F1}s: " +
-                        $"{_fileItems.Count} items, {SizeHelper.Format(_totalFoundBytes)}");
+                        $"{_allFoundItems.Count} items, {SizeHelper.Format(_totalFoundBytes)}");
 
-            if (_fileItems.Count > 0)
+            if (_allFoundItems.Count > 0)
             {
                 bool browsersOpen = ChkBrowserCache?.IsChecked == true &&
                     new[] { "chrome","msedge","firefox","brave","opera","browser","vivaldi" }
                         .Any(n => Process.GetProcessesByName(n).Length > 0);
                 string hint = browsersOpen ? " ⚠ закройте браузеры перед очисткой" : "";
-                SetProgress(100, $"Найдено {_fileItems.Count} объектов • {SizeHelper.Format(_totalFoundBytes)}");
+                SetProgress(100, $"Найдено {_allFoundItems.Count} объектов • {SizeHelper.Format(_totalFoundBytes)}");
                 SetStatus($"Найдено {SizeHelper.Format(_totalFoundBytes)} мусора{hint}", StatusKind.Found);
             }
             else
@@ -1217,7 +1417,7 @@ namespace CleanupTemp_Pro
 
         /// <summary>
         /// Сканирует папку в текущем потоке (вызывается из Parallel.ForEach).
-        /// Файлы накапливаются в батчи и сбрасываются в UI редко (300мс / 500 файлов).
+        /// Файлы накапливаются в батчи и сбрасываются в UI редко (600мс / 2000 файлов).
         /// </summary>
         private void ScanDir(string dir, string cat, string icon, CancellationToken token)
         {
@@ -1238,7 +1438,7 @@ namespace CleanupTemp_Pro
                 CancellationToken effectiveToken;
                 if (isSoftwareDist)
                 {
-                    timeoutCts    = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    timeoutCts    = new CancellationTokenSource(TimeSpan.FromSeconds(15));
                     linkedCts     = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token);
                     effectiveToken = linkedCts.Token;
                 }
@@ -1273,20 +1473,26 @@ namespace CleanupTemp_Pro
                     int t = batchT, br = batchBr, rc = batchRc;
                     batch.Clear(); batchBytes = 0; batchT = batchBr = batchRc = 0;
 
-                    Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+                    Dispatcher.InvokeAsync(() =>
                     {
-                        _fileItems.AddRange(items);
+                        // _allFoundItems — полный список для очистки (без ограничения)
+                        _allFoundItems.AddRange(items);
+                        // _fileItems — только для отображения, ограничен 5000
+                        const int MaxDisplayItems = 5000;
+                        int canAdd = MaxDisplayItems - _fileItems.Count;
+                        if (canAdd > 0)
+                            _fileItems.AddRange(items.Take(canAdd));
                         _totalFoundBytes += bytes;
                         _statTemp        += t;
                         _statBrowser     += br;
                         _statRecycle     += rc;
                         TotalSizeText.Text    = SizeHelper.Format(_totalFoundBytes);
-                        FileCountText.Text    = $"{_fileItems.Count} файлов";
-                        ListCountLabel.Text   = $"{_fileItems.Count} объектов";
+                        FileCountText.Text    = $"{_allFoundItems.Count} файлов";
+                        ListCountLabel.Text   = $"{_allFoundItems.Count} объектов";
                         StatTempFiles.Text    = _statTemp.ToString();
                         StatBrowserFiles.Text = _statBrowser.ToString();
                         StatRecycleBin.Text   = _statRecycle.ToString();
-                    });
+                    }, DispatcherPriority.Background);
                 }
 
                 foreach (var file in Directory.EnumerateFiles(dir, "*", opts))
@@ -1303,9 +1509,10 @@ namespace CleanupTemp_Pro
                                 continue;
                         }
 
-                        var fi = new FileInfo(file);
-                        if (!fi.Exists) continue;
                         if (IsInProtectedFolder(file)) continue;
+                        // Белый список — проверяем O(1) по HashSet
+                        if (IsExcluded(file)) continue;
+                        var fi = new FileInfo(file);
                         if (fi.LastWriteTimeUtc > minAge) continue;
 
                         string fileName = fi.Name;
@@ -1317,8 +1524,8 @@ namespace CleanupTemp_Pro
                         long sz = fi.Length;
                         if (sz == 0 && (cat.Contains("Temp") || cat.Contains("temp"))) continue;
                         if (cat.Contains("Temp") && _safeExtensionsInTemp.Contains(fileExt)) continue;
-                        if (fileExt.Equals(".tmp", StringComparison.OrdinalIgnoreCase) &&
-                            cat.Contains("Temp") && IsTmpFileLocked(file)) continue;
+                        // IsTmpFileLocked убран — открытие FileStream на каждом .tmp очень медленно.
+                        // Заблокированные файлы поймаются через IOException при очистке.
 
                         batchBytes += sz;
                         if      (isBrowser) batchBr++;
@@ -1326,7 +1533,7 @@ namespace CleanupTemp_Pro
                         else                batchT++;
                         batch.Add(new FileItem { Icon = icon, Path = file, Category = cat, SizeBytes = sz });
 
-                        if (sw.ElapsedMilliseconds >= 300 || batch.Count >= 500)
+                        if (sw.ElapsedMilliseconds >= 600 || batch.Count >= 2000)
                         {
                             Flush();
                             sw.Restart();
@@ -1370,8 +1577,8 @@ namespace CleanupTemp_Pro
                             SizeBytes = sz
                         });
                         TotalSizeText.Text  = SizeHelper.Format(_totalFoundBytes);
-                        FileCountText.Text  = $"{_fileItems.Count} записей";
-                        ListCountLabel.Text = $"{_fileItems.Count} объектов";
+                        FileCountText.Text  = $"{_allFoundItems.Count} файлов";
+                        ListCountLabel.Text = $"{_allFoundItems.Count} объектов";
                         StatRecycleBin.Text = _statRecycle.ToString();
                     });
                 }
@@ -1393,12 +1600,16 @@ namespace CleanupTemp_Pro
                 if (!di.Exists) return result;
                 foreach (var fi in di.EnumerateFiles("*.evtx"))
                 {
-                    long sz = fi.Length;
-                    if (sz <= emptyThreshold) continue;
-                    string channel = fi.Name
-                        .Replace(".evtx", "", StringComparison.OrdinalIgnoreCase)
-                        .Replace("%4", "/");
-                    result.Add((channel, sz - emptyThreshold));
+                    try
+                    {
+                        long sz = fi.Length;
+                        if (sz <= emptyThreshold) continue;
+                        string channel = fi.Name
+                            .Replace(".evtx", "", StringComparison.OrdinalIgnoreCase)
+                            .Replace("%4", "/");
+                        result.Add((channel, sz - emptyThreshold));
+                    }
+                    catch { /* файл заблокирован службой EventLog — пропускаем */ }
                 }
             }
             catch (Exception ex) { AppLog.Error("GetEventLogChannels failed", ex); }
@@ -1438,18 +1649,18 @@ namespace CleanupTemp_Pro
 
         private async void CleanBtn_Execute()
         {
-            if (_fileItems.Count == 0) return;
+            if (_allFoundItems.Count == 0) return;
             if (_isScanning || _isCleaning) return;
             _isCleaning = true;
             SetUiRunning(true);
 
             var dlg = new CustomDialog(
                 "Подтверждение очистки",
-                $"Будет удалено {_fileItems.Count} объектов.\nЭто действие нельзя отменить.",
+                $"Будет удалено {_allFoundItems.Count} объектов.\nЭто действие нельзя отменить.",
                 DialogKind.Confirm,
                 stats: new List<StatRow>
                 {
-                    new() { Label = "Найдено файлов:", Value = _fileItems.Count.ToString(),         Color = "#AAAACC" },
+                    new() { Label = "Найдено файлов:", Value = _allFoundItems.Count.ToString(),     Color = "#AAAACC" },
                     new() { Label = "Займёт места:",   Value = SizeHelper.Format(_totalFoundBytes), Color = "#FF4A6A" },
                 },
                 showCancel: true);
@@ -1457,7 +1668,7 @@ namespace CleanupTemp_Pro
             if (!dlg.Result)
             {
                 _isCleaning = false;
-                SetUiRunning(false, _fileItems.Count > 0);
+                SetUiRunning(false, _allFoundItems.Count > 0);
                 return;
             }
 
@@ -1482,7 +1693,7 @@ namespace CleanupTemp_Pro
                     if (!wuDlg.Result)
                     {
                         _isCleaning = false;
-                        SetUiRunning(false, _fileItems.Count > 0);
+                        SetUiRunning(false, _allFoundItems.Count > 0);
                         return;
                     }
                 }
@@ -1514,7 +1725,7 @@ namespace CleanupTemp_Pro
                     if (!warnDlg.Result)
                     {
                         _isCleaning = false;
-                        SetUiRunning(false, _fileItems.Count > 0);
+                        SetUiRunning(false, _allFoundItems.Count > 0);
                         return;
                     }
                 }
@@ -1529,10 +1740,22 @@ namespace CleanupTemp_Pro
             SetStatus("Очистка...", StatusKind.Cleaning);
             SetProgress(0, "Начинаю очистку...");
 
-            var snapshot   = _fileItems.ToList();
-            bool doRecycle = snapshot.Any(x => x.Category == "Корзина");
+            // Берём полный список — _fileItems ограничен 5000 для отображения,
+            // _allFoundItems содержит все найденные файлы
+            var snapshot        = _allFoundItems.ToList();
+            // Снапшот для графика: сохраняем ДО того как _allFoundItems будет очищен в finally
+            var cleanedSnapshot = snapshot.ToList();
+            bool doRecycle = snapshot.Any(x => x.Category == "Корзина")
+                          || _fileItems.Any(x => x.Category == "Корзина");
             var regular    = snapshot.Where(x => x.Category != "Корзина").ToList();
-            var cleanDirs  = GetScanPaths().Select(p => p.Path).Distinct().ToList();
+            // cleanDirs берём из уже известных путей файлов — не перечисляем профили браузеров снова
+            var cleanDirs  = regular
+                .Where(x => x.Category != "Логи событий")
+                .Select(x => System.IO.Path.GetDirectoryName(x.Path))
+                .Where(d => d != null)
+                .Distinct()
+                .Cast<string>()
+                .ToList();
 
             int done = 0, deleted = 0, skipped = 0;
             var token = _cts.Token;
@@ -1560,6 +1783,10 @@ namespace CleanupTemp_Pro
                                     : "Не удалось остановить службу — пробую удалить..."));
                     }
 
+                    // ── ВНЕШНИЙ try-finally: службы WU восстанавливаются ВСЕГДА ──
+                    // Охватывает все фазы: логи, файлы, корзину, пустые папки.
+                    // Даже если Корзина или CleanEmptyDirs бросят необработанное
+                    // исключение — finally гарантированно запустит wuauserv/BITS.
                     try
                     {
                         // ── Логи событий отдельно до параллельного удаления ──
@@ -1584,7 +1811,7 @@ namespace CleanupTemp_Pro
                             {
                                 var entry = _fileItems.FirstOrDefault(x => x.Category == "Логи событий");
                                 if (entry != null) _fileItems.Remove(entry);
-                                StatCleaned.Text = SizeHelper.Format(_cleanedBytes);
+                                StatCleaned.Text = SizeHelper.Format(Interlocked.Read(ref _cleanedBytes));
                             }, DispatcherPriority.Background);
                         }
 
@@ -1593,12 +1820,18 @@ namespace CleanupTemp_Pro
                             .Where(x => x.Category != "Логи событий")
                             .ToList();
 
+                        // Сбрасываем done для точного отображения прогресса файлов
+                        done = 0;
+
                         var parallelOpts = new ParallelOptions
                         {
                             MaxDegreeOfParallelism = CleanDegree,
                             CancellationToken      = token
                         };
                         long lastUiUpdateMs = 0;
+                        // Собираем пути удалённых файлов в потокобезопасную коллекцию
+                        // чтобы НЕ делать File.Exists() в UI потоке на тысячах файлов
+                        var deletedPaths = new System.Collections.Concurrent.ConcurrentBag<string>();
 
                         try
                         {
@@ -1608,10 +1841,17 @@ namespace CleanupTemp_Pro
                                 {
                                     if (File.Exists(item.Path))
                                     {
-                                        var attr = File.GetAttributes(item.Path);
-                                        if ((attr & (FileAttributes.ReadOnly | FileAttributes.System)) != 0)
+                                        try
+                                        {
+                                            File.Delete(item.Path);
+                                        }
+                                        catch (UnauthorizedAccessException)
+                                        {
+                                            // Только если не удалось — пробуем снять атрибуты
                                             File.SetAttributes(item.Path, FileAttributes.Normal);
-                                        File.Delete(item.Path);
+                                            File.Delete(item.Path);
+                                        }
+                                        deletedPaths.Add(item.Path);
                                         Interlocked.Add(ref _cleanedBytes, item.SizeBytes);
                                         Interlocked.Increment(ref deleted);
                                     }
@@ -1632,24 +1872,25 @@ namespace CleanupTemp_Pro
                                     Interlocked.Increment(ref skipped);
                                 }
 
-                                int d2    = Interlocked.Increment(ref done);
+                                int d2     = Interlocked.Increment(ref done);
                                 long nowMs = sw.ElapsedMilliseconds;
                                 long prevMs = Interlocked.Exchange(ref lastUiUpdateMs, nowMs);
 
-                                if (nowMs - prevMs >= 200 || d2 == regularFiles.Count)
+                                // Обновляем UI не чаще чем раз в 400мс (было 200) 
+                                if (nowMs - prevMs >= 400 || d2 == regularFiles.Count)
                                 {
-                                    long c2 = _cleanedBytes;
-                                    var deleted2 = regularFiles
-                                        .Where(x => !File.Exists(x.Path))
-                                        .Select(x => x.Path)
-                                        .ToHashSet();
+                                    long c2 = Interlocked.Read(ref _cleanedBytes);
+                                    // Снимаем снапшот и очищаем bag — не копим миллионы строк
+                                    var deletedSnap = new HashSet<string>();
+                                    while (deletedPaths.TryTake(out var p))
+                                        deletedSnap.Add(p);
 
                                     Dispatcher.InvokeAsync(() =>
                                     {
                                         var toRemove = _fileItems
                                             .Where(x => x.Category != "Корзина" &&
                                                         x.Category != "Логи событий" &&
-                                                        deleted2.Contains(x.Path))
+                                                        deletedSnap.Contains(x.Path))
                                             .ToList();
                                         SetProgress(
                                             regularFiles.Count > 0 ? d2 * 100.0 / regularFiles.Count : 100,
@@ -1661,9 +1902,39 @@ namespace CleanupTemp_Pro
                             });
                         }
                         catch (OperationCanceledException) { AppLog.Info("Clean cancelled mid-way"); }
+
+                        // ── Корзина ──────────────────────────────────────────
+                        if (doRecycle && !token.IsCancellationRequested)
+                        {
+                            Dispatcher.Invoke(() => SetProgress(96, "Очищаю корзину..."));
+                            try
+                            {
+                                var rbi = new SHQUERYRBINFO { cbSize = Marshal.SizeOf<SHQUERYRBINFO>() };
+                                SHQueryRecycleBin(null, ref rbi);
+                                int hr = SHEmptyRecycleBin(IntPtr.Zero, null, 0x00000001 | 0x00000002 | 0x00000004);
+                                if (hr != 0 && hr != unchecked((int)0x80070057)) // 0x80070057 = корзина уже пуста
+                                    AppLog.Warn($"SHEmptyRecycleBin HRESULT: 0x{hr:X8}");
+                                Interlocked.Add(ref _cleanedBytes, rbi.i64Size);
+                                long c3 = Interlocked.Read(ref _cleanedBytes);
+                                Dispatcher.Invoke(() =>
+                                {
+                                    var rb = _fileItems.FirstOrDefault(x => x.Category == "Корзина");
+                                    if (rb != null) _fileItems.Remove(rb);
+                                    StatCleaned.Text    = SizeHelper.Format(c3);
+                                    StatRecycleBin.Text = "0";
+                                });
+                            }
+                            catch (Exception ex) { AppLog.Error("SHEmptyRecycleBin failed", ex); }
+                        }
+
+                        Dispatcher.Invoke(() => SetProgress(99, "Удаляю пустые папки..."));
+                        CleanEmptyDirs(cleanDirs);
                     }
                     finally
                     {
+                        // Службы запускаем ВСЕГДА — даже если очистка прервана,
+                        // отменена токеном, упала с исключением или убита процессом.
+                        // Windows не должна оставаться без обновлений из-за нашей программы.
                         if (needWuStop && wuWasRunning)
                         {
                             Dispatcher.Invoke(() =>
@@ -1674,33 +1945,6 @@ namespace CleanupTemp_Pro
                             StartWindowsUpdateService();
                         }
                     }
-
-                    // ── Корзина ──────────────────────────────────────────
-                    if (doRecycle && !token.IsCancellationRequested)
-                    {
-                        Dispatcher.Invoke(() => SetProgress(96, "Очищаю корзину..."));
-                        try
-                        {
-                            var rbi = new SHQUERYRBINFO { cbSize = Marshal.SizeOf<SHQUERYRBINFO>() };
-                            SHQueryRecycleBin(null, ref rbi);
-                            int hr = SHEmptyRecycleBin(IntPtr.Zero, null, 0x00000001 | 0x00000002 | 0x00000004);
-                            if (hr != 0 && hr != unchecked((int)0x80070057)) // 0x80070057 = корзина уже пуста
-                                AppLog.Warn($"SHEmptyRecycleBin HRESULT: 0x{hr:X8}");
-                            Interlocked.Add(ref _cleanedBytes, rbi.i64Size);
-                            long c3 = _cleanedBytes;
-                            Dispatcher.Invoke(() =>
-                            {
-                                var rb = _fileItems.FirstOrDefault(x => x.Category == "Корзина");
-                                if (rb != null) _fileItems.Remove(rb);
-                                StatCleaned.Text    = SizeHelper.Format(c3);
-                                StatRecycleBin.Text = "0";
-                            });
-                        }
-                        catch (Exception ex) { AppLog.Error("SHEmptyRecycleBin failed", ex); }
-                    }
-
-                    Dispatcher.Invoke(() => SetProgress(99, "Удаляю пустые папки..."));
-                    CleanEmptyDirs(cleanDirs);
 
                 }, CancellationToken.None);
             }
@@ -1721,6 +1965,7 @@ namespace CleanupTemp_Pro
                 _cleanedBytes    = 0;
                 _statTemp = _statBrowser = _statRecycle = 0;
                 _fileItems.Clear();
+                _allFoundItems.Clear();
                 StatTempFiles.Text = StatBrowserFiles.Text = StatRecycleBin.Text = "0";
                 SetUiRunning(false, false);
 
@@ -1753,39 +1998,613 @@ namespace CleanupTemp_Pro
                         stats.Add(new() { Label = "Пропущено (заняты):", Value = skipped.ToString(), Color = "#FF8C00" });
                     new CustomDialog("Очистка завершена!", "🌟  Ваш компьютер стал чище!",
                         DialogKind.Success, stats).ShowDialog();
+
+                    // Показываем пирог после закрытия диалога — пользователь уже
+                    // знает что всё хорошо, теперь видит разбивку по категориям
+                    ShowCleanupChart(freed, cleanedSnapshot);
                 }
             }
         }
 
         /// <summary>
-        /// Удаляет пустые папки снизу вверх. Логирует количество удалённых.
+        /// Удаляет пустые папки снизу вверх рекурсивно.
+        /// Не загружает всё дерево в память — обходит на лету.
         /// </summary>
         private void CleanEmptyDirs(IEnumerable<string> roots)
         {
             int removedCount = 0;
             foreach (var root in roots)
             {
+                if (!Directory.Exists(root)) continue;
                 try
                 {
-                    foreach (var d in Directory.GetDirectories(root, "*", SearchOption.AllDirectories)
-                                               .OrderByDescending(x => x.Length))
+                    // Обходим только подпапки — корневую папку (Temp, Cache и т.д.) не трогаем
+                    foreach (var sub in Directory.EnumerateDirectories(root))
                     {
-                        try
-                        {
-                            if (!Directory.EnumerateFileSystemEntries(d).Any())
-                            {
-                                Directory.Delete(d);
-                                removedCount++;
-                            }
-                        }
-                        catch (UnauthorizedAccessException) { /* нет прав — пропускаем */ }
-                        catch (Exception ex) { AppLog.Warn($"CleanEmptyDirs delete {d}: {ex.Message}"); }
+                        try { RemoveEmptySubdirs(sub, ref removedCount); }
+                        catch (Exception ex) { AppLog.Warn($"CleanEmptyDirs sub {sub}: {ex.Message}"); }
                     }
                 }
                 catch (Exception ex) { AppLog.Warn($"CleanEmptyDirs root {root}: {ex.Message}"); }
             }
             if (removedCount > 0)
                 AppLog.Info($"CleanEmptyDirs: removed {removedCount} empty folders");
+        }
+
+        private static void RemoveEmptySubdirs(string dir, ref int count)
+        {
+            try
+            {
+                foreach (var sub in Directory.EnumerateDirectories(dir))
+                    RemoveEmptySubdirs(sub, ref count);
+
+                // После рекурсивного прохода проверяем — возможно папка стала пустой
+                if (!Directory.EnumerateFileSystemEntries(dir).Any())
+                {
+                    Directory.Delete(dir);
+                    count++;
+                }
+            }
+            catch (UnauthorizedAccessException) { }
+            catch (Exception ex) { AppLog.Warn($"RemoveEmptySubdirs {dir}: {ex.Message}"); }
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  БЕЛЫЙ СПИСОК (ИСКЛЮЧЕНИЯ)
+        // ══════════════════════════════════════════════════════════════
+
+        private void LoadExclusions()
+        {
+            try
+            {
+                if (!File.Exists(ExclusionsPath)) return;
+                var list = JsonSerializer.Deserialize<List<string>>(File.ReadAllText(ExclusionsPath));
+                if (list == null) return;
+                _excludePaths = new HashSet<string>(list, StringComparer.OrdinalIgnoreCase);
+                foreach (var path in list)
+                    _exclusionItems.Add(new ExclusionItem
+                    {
+                        Path = path,
+                        Icon = Directory.Exists(path) ? "📁" : "📄"
+                    });
+                AppLog.Info($"Exclusions loaded: {list.Count} entries");
+            }
+            catch (Exception ex) { AppLog.Error("LoadExclusions failed", ex); }
+        }
+
+        private void SaveExclusions()
+        {
+            try
+            {
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(ExclusionsPath)!);
+                File.WriteAllText(ExclusionsPath,
+                    JsonSerializer.Serialize(_excludePaths.ToList(),
+                        new JsonSerializerOptions { WriteIndented = true }));
+            }
+            catch (Exception ex) { AppLog.Error("SaveExclusions failed", ex); }
+        }
+
+        private void AddToExclusions(string path, string icon)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return;
+            if (_excludePaths.Add(path)) // HashSet.Add возвращает false если уже есть
+            {
+                _exclusionItems.Add(new ExclusionItem { Path = path, Icon = icon });
+                SaveExclusions();
+                AppLog.Info($"Exclusion added: {path}");
+                SetStatus($"В исключения добавлено: {System.IO.Path.GetFileName(path)}", StatusKind.Done);
+            }
+        }
+
+        // Контекстное меню FileListView: «Исключить файл»
+        private void AddExclusion_Click(object sender, RoutedEventArgs e)
+        {
+            if (FileListView.SelectedItem is not FileItem item) return;
+            AddToExclusions(item.Path, "📄");
+        }
+
+        // Контекстное меню FileListView: «Исключить всю папку»
+        private void AddFolderExclusion_Click(object sender, RoutedEventArgs e)
+        {
+            if (FileListView.SelectedItem is not FileItem item) return;
+            string? folder = System.IO.Path.GetDirectoryName(item.Path);
+            if (folder != null)
+                AddToExclusions(folder, "📁");
+        }
+
+        // Кнопка «+ Добавить путь» на вкладке исключений — открываем FolderBrowserDialog
+        private void AddExclusionManual_Click(object sender, MouseButtonEventArgs e)
+        {
+            // Используем OpenFileDialog в режиме выбора папки (ValidateNames=false, CheckFileExists=false)
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Title            = "Выберите файл или папку для исключения",
+                CheckFileExists  = false,
+                CheckPathExists  = true,
+                FileName         = "Выберите папку или файл",
+                Filter           = "Все файлы|*.*",
+                ValidateNames    = false,
+            };
+            if (dlg.ShowDialog() == true)
+            {
+                string selected = dlg.FileName;
+                // Если пользователь написал имя несуществующего файла — берём папку
+                if (!File.Exists(selected) && Directory.Exists(System.IO.Path.GetDirectoryName(selected)))
+                    selected = System.IO.Path.GetDirectoryName(selected)!;
+                string icon = Directory.Exists(selected) ? "📁" : "📄";
+                AddToExclusions(selected, icon);
+            }
+        }
+
+        // Кнопка «✕» рядом с каждым элементом исключения
+        private void RemoveExclusion_Click(object sender, MouseButtonEventArgs e)
+        {
+            if (sender is not FrameworkElement fe) return;
+            string? path = fe.Tag as string;
+            if (path == null) return;
+            _excludePaths.Remove(path);
+            var item = _exclusionItems.FirstOrDefault(x => x.Path == path);
+            if (item != null) _exclusionItems.Remove(item);
+            SaveExclusions();
+            AppLog.Info($"Exclusion removed: {path}");
+        }
+
+        // Кнопка «🗑 Очистить всё»
+        private void ClearExclusions_Click(object sender, MouseButtonEventArgs e)
+        {
+            var dlg = new CustomDialog("Очистить белый список?",
+                "Все исключения будут удалены. Сканирование снова будет проверять эти файлы.",
+                DialogKind.Confirm, showCancel: true);
+            dlg.ShowDialog();
+            if (!dlg.Result) return;
+            _excludePaths.Clear();
+            _exclusionItems.Clear();
+            SaveExclusions();
+            AppLog.Info("All exclusions cleared");
+        }
+
+        // Hover эффекты для кнопок на вкладке исключений
+        private void ExclusionBtn_Enter(object sender, MouseEventArgs e)
+        {
+            if (sender is Border b)
+                b.Effect = Glow(Color.FromRgb(0x4A, 0x9E, 0xFF), r: 14, o: 0.6);
+        }
+        private void ExclusionBtn_Leave(object sender, MouseEventArgs e)
+        {
+            if (sender is Border b) b.Effect = null;
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  БОЛЬШИЕ ФАЙЛЫ
+        // ══════════════════════════════════════════════════════════════
+
+        private static readonly string[] _largeFileDriveLetters =
+            DriveInfo.GetDrives()
+                .Where(d => d.IsReady && d.DriveType is DriveType.Fixed or DriveType.Removable)
+                .Select(d => d.RootDirectory.FullName)
+                .ToArray();
+
+        private static string GetLargeFileIcon(string ext) => ext.ToLowerInvariant() switch
+        {
+            ".iso" or ".img" or ".vhd" or ".vhdx" => "💿",
+            ".zip" or ".rar" or ".7z" or ".tar"
+                or ".gz" or ".bz2" or ".xz"       => "🗜️",
+            ".mp4" or ".mkv" or ".avi" or ".mov"
+                or ".wmv" or ".flv" or ".m2ts"    => "🎬",
+            ".mp3" or ".flac" or ".wav" or ".aac" => "🎵",
+            ".exe" or ".msi"                       => "⚙️",
+            ".pdf"                                 => "📕",
+            ".psd" or ".ai" or ".raw" or ".nef"
+                or ".cr2" or ".arw"               => "🎨",
+            ".vmdk" or ".ova" or ".ovf"            => "🖥️",
+            ".bak" or ".backup"                    => "💾",
+            _                                      => "📦",
+        };
+
+        private async void LargeScan_Click(object sender, MouseButtonEventArgs e)
+        {
+            // Отменяем предыдущее сканирование если оно идёт
+            _largeScanCts?.Cancel();
+            _largeScanCts?.Dispose();
+            _largeScanCts = new CancellationTokenSource();
+            var token = _largeScanCts.Token;
+
+            _largeFileItems.Clear();
+            LargeFilesStatus.Text = "Поиск...";
+            LargeScanBtnBorder.IsEnabled = false;
+            LargeScanBtnBorder.Opacity   = 0.5;
+
+            // Читаем порог на UI потоке
+            long threshold = 524_288_000L; // дефолт 500 МБ
+            if (LargeSizeThreshold.SelectedItem is ComboBoxItem ci &&
+                long.TryParse(ci.Tag?.ToString(), out long t))
+                threshold = t;
+
+            var sw = Stopwatch.StartNew();
+            long totalFound = 0;
+            int  countFound = 0;
+
+            try
+            {
+                await Task.Run(() =>
+                {
+                    // Сканируем все готовые фиксированные и съёмные диски
+                    var drives = DriveInfo.GetDrives()
+                        .Where(d => d.IsReady &&
+                               d.DriveType is DriveType.Fixed or DriveType.Removable)
+                        .ToList();
+
+                    var batch = new List<LargeFileItem>(32);
+
+                    void Flush()
+                    {
+                        if (batch.Count == 0) return;
+                        var snap = batch.ToList();
+                        batch.Clear();
+                        Dispatcher.InvokeAsync(() =>
+                        {
+                            _largeFileItems.AddRange(snap);
+                            LargeFilesStatus.Text =
+                                $"Найдено: {countFound} файлов • {SizeHelper.Format(totalFound)}";
+                        }, DispatcherPriority.Background);
+                    }
+
+                    foreach (var drive in drives)
+                    {
+                        if (token.IsCancellationRequested) break;
+                        var opts = new EnumerationOptions
+                        {
+                            IgnoreInaccessible    = true,
+                            RecurseSubdirectories = true,
+                            AttributesToSkip      = FileAttributes.System | FileAttributes.ReparsePoint,
+                        };
+                        try
+                        {
+                            foreach (var file in Directory.EnumerateFiles(drive.RootDirectory.FullName, "*", opts))
+                            {
+                                if (token.IsCancellationRequested) break;
+                                try
+                                {
+                                    var fi = new FileInfo(file);
+                                    if (fi.Length < threshold) continue;
+
+                                    string ext      = fi.Extension;
+                                    string category = drive.VolumeLabel is { Length: > 0 } lbl
+                                        ? $"{lbl} ({drive.Name.TrimEnd('\\')})"
+                                        : drive.Name.TrimEnd('\\');
+
+                                    batch.Add(new LargeFileItem
+                                    {
+                                        Icon      = GetLargeFileIcon(ext),
+                                        Path      = file,
+                                        FileName  = fi.Name,
+                                        Category  = category,
+                                        SizeBytes = fi.Length,
+                                    });
+                                    Interlocked.Add(ref totalFound, fi.Length);
+                                    Interlocked.Increment(ref countFound);
+
+                                    if (batch.Count >= 50)
+                                        Flush();
+                                }
+                                catch (UnauthorizedAccessException) { }
+                                catch (Exception ex) { AppLog.Warn($"LargeFile scan: {file} | {ex.Message}"); }
+                            }
+                        }
+                        catch (Exception ex) { AppLog.Warn($"LargeFile drive {drive.Name}: {ex.Message}"); }
+                        Flush();
+                    }
+                }, CancellationToken.None);
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { AppLog.Error("LargeScan failed", ex); }
+            finally
+            {
+                LargeScanBtnBorder.IsEnabled = true;
+                LargeScanBtnBorder.Opacity   = 1.0;
+                // Сортируем по убыванию размера — самые жирные файлы сверху
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    var sorted = _largeFileItems.OrderByDescending(x => x.SizeBytes).ToList();
+                    _largeFileItems.Clear();
+                    _largeFileItems.AddRange(sorted);
+                    LargeFilesStatus.Text = countFound == 0
+                        ? "Файлов крупнее порога не найдено"
+                        : $"Найдено: {countFound} файлов • {SizeHelper.Format(totalFound)} • " +
+                          $"за {sw.Elapsed.TotalSeconds:F1}с";
+                });
+                AppLog.Info($"LargeScan done: {countFound} files, {SizeHelper.Format(totalFound)}, {sw.Elapsed.TotalSeconds:F1}s");
+            }
+        }
+
+        // Контекстное меню: «Открыть папку»
+        private void LargeFile_OpenFolder(object sender, RoutedEventArgs e)
+        {
+            if (LargeFilesListView.SelectedItem is not LargeFileItem item) return;
+            string? folder = System.IO.Path.GetDirectoryName(item.Path);
+            if (folder != null && Directory.Exists(folder))
+                Process.Start("explorer.exe", $"/select,\"{item.Path}\"");
+        }
+
+        // Контекстное меню: «Удалить файл» (с подтверждением)
+        private void LargeFile_Delete(object sender, RoutedEventArgs e)
+        {
+            if (LargeFilesListView.SelectedItem is not LargeFileItem item) return;
+            var dlg = new CustomDialog(
+                "Удалить файл?",
+                $"{item.FileName}\n{SizeHelper.Format(item.SizeBytes)}",
+                DialogKind.Confirm,
+                stats: new List<StatRow>
+                {
+                    new() { Label = "Путь:", Value = item.Path, Color = "#AAAACC" },
+                    new() { Label = "Размер:", Value = item.SizeText, Color = "#FF8C00" },
+                },
+                showCancel: true);
+            dlg.ShowDialog();
+            if (!dlg.Result) return;
+            try
+            {
+                File.Delete(item.Path);
+                _largeFileItems.Remove(item);
+                AppLog.Info($"LargeFile deleted: {item.Path}");
+                SetStatus($"Удалено: {item.FileName}", StatusKind.Done);
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error($"LargeFile delete failed: {item.Path}", ex);
+                new CustomDialog("Ошибка удаления", ex.Message, DialogKind.Error).ShowDialog();
+            }
+        }
+
+        // Hover эффекты для кнопки «Найти» на вкладке больших файлов
+        private void LargeScanBtn_Enter(object sender, MouseEventArgs e)
+        {
+            if (LargeScanBtnBorder.IsEnabled)
+                LargeScanBtnBorder.Effect = Glow(Color.FromRgb(0xA8, 0x55, 0xF7), r: 18, o: 0.8);
+        }
+        private void LargeScanBtn_Leave(object sender, MouseEventArgs e)
+            => LargeScanBtnBorder.Effect = null;
+
+        // ══════════════════════════════════════════════════════════════
+        //  ТРЕЙ — ИНТЕГРАЦИЯ
+        // ══════════════════════════════════════════════════════════════
+
+        private void MainWindow_StateChanged(object? sender, EventArgs e)
+        {
+            if (WindowState != WindowState.Minimized) return;
+            // Скрываем окно в трей вместо стандартного сворачивания на панель задач
+            Hide();
+            App.Instance.ShowBalloon(
+                "CleanupTemp Pro свёрнут в трей",
+                "Дважды щёлкните иконку, чтобы открыть снова.",
+                durationMs: 2500);
+        }
+
+        /// <summary>
+        /// Вызывается из App при нажатии «Сканировать сейчас» в трей-меню.
+        /// Безопасен — проверяет флаги перед запуском.
+        /// </summary>
+        public void TriggerScanFromTray()
+        {
+            if (_isScanning || _isCleaning) return;
+            ScanBtn_Execute();
+        }
+
+        /// <summary>
+        /// Единая точка обновления трея из MainWindow.
+        /// Все вызовы идут через этот метод — не разбросаны по коду.
+        /// </summary>
+        private void NotifyTray(TrayStatus status, string? detail = null)
+            => App.Instance.UpdateTrayStatus(status, detail);
+
+        // ══════════════════════════════════════════════════════════════
+        //  PIE CHART — отчёт по очистке
+        // ══════════════════════════════════════════════════════════════
+
+        // Цветовая палитра категорий — консистентна между запусками
+        private static readonly Dictionary<string, string> _categoryColors = new(StringComparer.OrdinalIgnoreCase)
+        {
+            // Temp / System
+            { "User Temp",               "#4A9EFF" },
+            { "Windows Temp",            "#3A8EEF" },
+            { "Prefetch",                "#2A7EDF" },
+            { "Логи событий",            "#5599FF" },
+            // Windows Update
+            { "Windows Update кэш",      "#A855F7" },
+            // Browser
+            { "Chrome кэш",              "#F59E0B" },
+            { "Edge кэш",                "#E8A020" },
+            { "Firefox кэш",             "#FF6B35" },
+            { "Brave кэш",               "#FB923C" },
+            { "Opera кэш",               "#EF4444" },
+            { "Yandex кэш",              "#DC2626" },
+            { "Vivaldi кэш",             "#C084FC" },
+            // Thumbnails / Office
+            { "Thumbnails кэш",          "#06D6C7" },
+            { "IE/Edge Legacy Cache",    "#10B981" },
+            { "Office кэш",              "#34D399" },
+            { "Office FileCache",        "#6EE7B7" },
+            // Recycle
+            { "Корзина",                 "#FF4A6A" },
+        };
+
+        // Цвета для неизвестных категорий (ротация)
+        private static readonly string[] _fallbackColors =
+        {
+            "#818CF8", "#F472B6", "#38BDF8", "#A3E635",
+            "#FDE68A", "#FCA5A5", "#6EE7B7", "#C4B5FD"
+        };
+
+        private string GetCategoryColor(string category, int fallbackIndex)
+        {
+            // Точное совпадение
+            if (_categoryColors.TryGetValue(category, out var c)) return c;
+            // Частичное совпадение (браузерные подкатегории, внешние диски и т.д.)
+            foreach (var kv in _categoryColors)
+                if (category.Contains(kv.Key, StringComparison.OrdinalIgnoreCase)) return kv.Value;
+            return _fallbackColors[fallbackIndex % _fallbackColors.Length];
+        }
+
+        /// <summary>
+        /// Вызывается из CleanBtn_Execute после успешной очистки.
+        /// Группирует _allFoundItems по категориям, рисует диаграмму и показывает оверлей.
+        /// </summary>
+        private void ShowCleanupChart(long totalFreed, List<FileItem> cleanedItems)
+        {
+            if (totalFreed == 0 || cleanedItems.Count == 0) return;
+
+            // ── Группировка: сжимаем похожие категории браузеров ──
+            var groups = cleanedItems
+                .GroupBy(f => NormalizeCategory(f.Category))
+                .Select((g, i) => new ChartSegment
+                {
+                    Category  = g.Key,
+                    SizeBytes = g.Sum(x => x.SizeBytes),
+                    HexColor  = GetCategoryColor(g.Key, i),
+                })
+                .OrderByDescending(s => s.SizeBytes)
+                .ToList();
+
+            // Считаем проценты; группы < 1.5% объединяем в «Прочее»
+            const double minPct = 0.015;
+            var main  = groups.Where(s => (double)s.SizeBytes / totalFreed >= minPct).ToList();
+            var other = groups.Where(s => (double)s.SizeBytes / totalFreed <  minPct).ToList();
+            if (other.Count > 0)
+                main.Add(new ChartSegment
+                {
+                    Category  = "Прочее",
+                    SizeBytes = other.Sum(s => s.SizeBytes),
+                    HexColor  = "#555577",
+                });
+
+            double total = main.Sum(s => s.SizeBytes);
+            foreach (var seg in main) seg.Pct = total > 0 ? (double)seg.SizeBytes / total : 0;
+
+            // ── Обновляем UI ──
+            ChartTotalValue.Text = SizeHelper.Format(totalFreed);
+            ChartLegend.ItemsSource = main;
+            DrawPieChart(main);
+            ChartOverlay.Visibility = Visibility.Visible;
+        }
+
+        /// <summary>Нормализует имя категории: браузеры → «Chrome кэш» и т.д.</summary>
+        private static string NormalizeCategory(string cat)
+        {
+            if (cat.StartsWith("Chrome",  StringComparison.OrdinalIgnoreCase)) return "Chrome кэш";
+            if (cat.StartsWith("Edge",    StringComparison.OrdinalIgnoreCase)) return "Edge кэш";
+            if (cat.StartsWith("Firefox", StringComparison.OrdinalIgnoreCase)) return "Firefox кэш";
+            if (cat.StartsWith("Brave",   StringComparison.OrdinalIgnoreCase)) return "Brave кэш";
+            if (cat.StartsWith("Opera",   StringComparison.OrdinalIgnoreCase)) return "Opera кэш";
+            if (cat.StartsWith("Yandex",  StringComparison.OrdinalIgnoreCase)) return "Yandex кэш";
+            if (cat.StartsWith("Vivaldi", StringComparison.OrdinalIgnoreCase)) return "Vivaldi кэш";
+            if (cat.StartsWith("WU кэш",  StringComparison.OrdinalIgnoreCase)) return "Windows Update кэш";
+            if (cat.StartsWith("Корзина", StringComparison.OrdinalIgnoreCase)) return "Корзина";
+            if (cat.StartsWith("Temp",    StringComparison.OrdinalIgnoreCase)) return "User Temp";
+            if (cat.StartsWith("Windows Temp", StringComparison.OrdinalIgnoreCase)) return "Windows Temp";
+            return cat;
+        }
+
+        /// <summary>
+        /// Рисует пончиковую диаграмму на ChartCanvas через PathGeometry.
+        /// Каждый сегмент — дуга между двумя углами с анимацией разворачивания.
+        /// </summary>
+        private void DrawPieChart(List<ChartSegment> segments)
+        {
+            ChartCanvas.Children.Clear();
+
+            const double cx = 90, cy = 90;   // центр
+            const double ro = 85, ri = 52;   // внешний и внутренний радиус (пончик)
+
+            double startAngle = -90.0;        // начинаем сверху
+
+            for (int i = 0; i < segments.Count; i++)
+            {
+                var seg = segments[i];
+                if (seg.Pct <= 0) continue;
+
+                double sweep = seg.Pct * 360.0;
+                // Маленький зазор между сегментами — визуальное разделение
+                double gap = segments.Count > 1 ? 1.5 : 0;
+                double endAngle = startAngle + sweep - gap;
+
+                var path = CreateDonutSegment(cx, cy, ro, ri, startAngle + gap / 2, endAngle);
+                path.Fill = seg.ColorBrush;
+                path.Stroke = new SolidColorBrush(Color.FromArgb(0x30, 0x00, 0x00, 0x00));
+                path.StrokeThickness = 0.5;
+
+                // Tooltip при наведении
+                path.ToolTip = $"{seg.Category}\n{seg.SizeText}  ({seg.PctText})";
+
+                // Анимация: разворачивание от 0 до полного угла через ScaleTransform
+                // Используем RotateTransform для последовательного «вырастания»
+                path.RenderTransformOrigin = new Point(0.5, 0.5);
+                path.Opacity = 0;
+                ChartCanvas.Children.Add(path);
+
+                // Staggered fade-in: каждый сегмент с задержкой
+                var fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(400))
+                {
+                    BeginTime    = TimeSpan.FromMilliseconds(i * 80),
+                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+                };
+                path.BeginAnimation(UIElement.OpacityProperty, fadeIn);
+
+                startAngle += sweep;
+            }
+        }
+
+        /// <summary>
+        /// Создаёт Path для одного сегмента пончика.
+        /// Геометрия: два дуговых отрезка + две прямые линии замыкания.
+        /// </summary>
+        private static System.Windows.Shapes.Path CreateDonutSegment(
+            double cx, double cy,
+            double ro, double ri,
+            double startDeg, double endDeg)
+        {
+            // Конвертируем градусы → радианы
+            double startRad = startDeg * Math.PI / 180.0;
+            double endRad   = endDeg   * Math.PI / 180.0;
+
+            bool isLargeArc = (endDeg - startDeg) > 180.0;
+
+            // Четыре точки сегмента
+            var p1 = new Point(cx + ro * Math.Cos(startRad), cy + ro * Math.Sin(startRad));
+            var p2 = new Point(cx + ro * Math.Cos(endRad),   cy + ro * Math.Sin(endRad));
+            var p3 = new Point(cx + ri * Math.Cos(endRad),   cy + ri * Math.Sin(endRad));
+            var p4 = new Point(cx + ri * Math.Cos(startRad), cy + ri * Math.Sin(startRad));
+
+            var fig = new PathFigure { StartPoint = p1, IsClosed = true };
+            // Внешняя дуга (по часовой)
+            fig.Segments.Add(new ArcSegment(p2, new System.Windows.Size(ro, ro),
+                0, isLargeArc, SweepDirection.Clockwise, true));
+            // Линия к внутреннему радиусу
+            fig.Segments.Add(new LineSegment(p3, true));
+            // Внутренняя дуга (против часовой)
+            fig.Segments.Add(new ArcSegment(p4, new System.Windows.Size(ri, ri),
+                0, isLargeArc, SweepDirection.Counterclockwise, true));
+
+            var geo = new PathGeometry();
+            geo.Figures.Add(fig);
+            return new System.Windows.Shapes.Path { Data = geo };
+        }
+
+        // Кнопка «← К результатам» — скрываем оверлей
+        private void ChartBack_Click(object sender, MouseButtonEventArgs e)
+        {
+            ChartOverlay.Visibility = Visibility.Collapsed;
+            SwitchTab(ActiveTab.Files);
+        }
+
+        private void ChartBackBtn_Enter(object sender, MouseEventArgs e)
+        {
+            if (sender is Border b)
+                b.Background = new SolidColorBrush(Color.FromRgb(0x2A, 0x3A, 0x5A));
+        }
+        private void ChartBackBtn_Leave(object sender, MouseEventArgs e)
+        {
+            if (sender is Border b)
+                b.Background = new SolidColorBrush(Color.FromRgb(0x1A, 0x2A, 0x4A));
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -1827,7 +2646,16 @@ namespace CleanupTemp_Pro
             if (e.ClickCount == 2) MaximizeRestore();
             else if (e.LeftButton == MouseButtonState.Pressed) DragMove();
         }
-        private void MinBtn_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+        private void MinBtn_Click(object sender, RoutedEventArgs e)
+        {
+            // Скрываем в трей напрямую через кнопку — не через StateChanged
+            // чтобы не показывать промежуточный Minimized на панели задач
+            Hide();
+            App.Instance.ShowBalloon(
+                "CleanupTemp Pro свёрнут в трей",
+                "Дважды щёлкните иконку, чтобы открыть снова.",
+                durationMs: 2500);
+        }
         private void MaxBtn_Click(object sender, RoutedEventArgs e) => MaximizeRestore();
         private void CloseBtn_Click(object sender, RoutedEventArgs e) => Close();
 
@@ -1884,11 +2712,96 @@ namespace CleanupTemp_Pro
             else AppLog.Warn("LoadLogo: no logo file found");
         }
 
+        // ══════════════════════════════════════════════════════════════
+        //  SHIMMER — переливание заголовка и иконки при наведении
+        // ══════════════════════════════════════════════════════════════
+
+        // Анимации храним как поля — чтобы остановить их при MouseLeave
+        private DoubleAnimation? _shimmerAnim;
+        private DoubleAnimation? _shimmerAnim2;
+        private DoubleAnimation? _iconGlowAnim;
+
+        private void TitleLogo_MouseEnter(object sender, MouseEventArgs e)
+        {
+            // ── Shimmer на тексте «Temp» ──
+            var brush1 = new LinearGradientBrush();
+            brush1.StartPoint = new Point(0, 0.5);
+            brush1.EndPoint   = new Point(1, 0.5);
+            brush1.GradientStops.Add(new GradientStop(Color.FromRgb(0x4A, 0x9E, 0xFF), 0.0));
+            brush1.GradientStops.Add(new GradientStop(Color.FromRgb(0xFF, 0xFF, 0xFF), 0.5));
+            brush1.GradientStops.Add(new GradientStop(Color.FromRgb(0xA8, 0x55, 0xF7), 1.0));
+            TitleRunTemp.Foreground = brush1;
+
+            _shimmerAnim = new DoubleAnimation(-0.5, 1.5, TimeSpan.FromMilliseconds(900))
+            {
+                RepeatBehavior = RepeatBehavior.Forever,
+                EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
+            };
+            brush1.GradientStops[1].BeginAnimation(GradientStop.OffsetProperty, _shimmerAnim);
+
+            // ── Shimmer на тексте «Pro» ──
+            var brush2 = new LinearGradientBrush();
+            brush2.StartPoint = new Point(0, 0.5);
+            brush2.EndPoint   = new Point(1, 0.5);
+            brush2.GradientStops.Add(new GradientStop(Color.FromRgb(0x06, 0xD6, 0xC7), 0.0));
+            brush2.GradientStops.Add(new GradientStop(Color.FromRgb(0xFF, 0xFF, 0xFF), 0.5));
+            brush2.GradientStops.Add(new GradientStop(Color.FromRgb(0x4A, 0x9E, 0xFF), 1.0));
+            TitleRunPro.Foreground = brush2;
+
+            _shimmerAnim2 = new DoubleAnimation(-0.5, 1.5, TimeSpan.FromMilliseconds(900))
+            {
+                RepeatBehavior = RepeatBehavior.Forever,
+                BeginTime      = TimeSpan.FromMilliseconds(150),
+                EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
+            };
+            brush2.GradientStops[1].BeginAnimation(GradientStop.OffsetProperty, _shimmerAnim2);
+
+            // ── Glow на иконке ──
+            _iconGlowAnim = new DoubleAnimation(8, 22, TimeSpan.FromMilliseconds(700))
+            {
+                AutoReverse    = true,
+                RepeatBehavior = RepeatBehavior.Forever,
+                EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
+            };
+            var glow = new System.Windows.Media.Effects.DropShadowEffect
+            {
+                Color       = Color.FromRgb(0x4A, 0x9E, 0xFF),
+                ShadowDepth = 0,
+                Opacity     = 0.85,
+                BlurRadius  = 8,
+            };
+            TitleLogoImage.Effect = glow;
+            glow.BeginAnimation(System.Windows.Media.Effects.DropShadowEffect.BlurRadiusProperty, _iconGlowAnim);
+        }
+
+        private void TitleLogo_MouseLeave(object sender, MouseEventArgs e)
+        {
+            _shimmerAnim?.SetValue(Timeline.BeginTimeProperty, null);
+            _shimmerAnim2?.SetValue(Timeline.BeginTimeProperty, null);
+
+            var origTemp = new LinearGradientBrush();
+            origTemp.StartPoint = new Point(0, 0.5);
+            origTemp.EndPoint   = new Point(1, 0.5);
+            origTemp.GradientStops.Add(new GradientStop(Color.FromRgb(0x4A, 0x9E, 0xFF), 0.0));
+            origTemp.GradientStops.Add(new GradientStop(Color.FromRgb(0xA8, 0x55, 0xF7), 1.0));
+            origTemp.Freeze();
+            TitleRunTemp.Foreground = origTemp;
+
+            TitleRunPro.Foreground = new SolidColorBrush(Color.FromRgb(0x06, 0xD6, 0xC7));
+            TitleLogoImage.Effect  = null;
+        }
+
         private void TabFiles_Click(object sender, MouseButtonEventArgs e)
-            => SwitchTab(false);
+            => SwitchTab(ActiveTab.Files);
 
         private void TabHistory_Click(object sender, MouseButtonEventArgs e)
-            => SwitchTab(true);
+            => SwitchTab(ActiveTab.History);
+
+        private void TabLarge_Click(object sender, MouseButtonEventArgs e)
+            => SwitchTab(ActiveTab.Large);
+
+        private void TabExclusions_Click(object sender, MouseButtonEventArgs e)
+            => SwitchTab(ActiveTab.Exclusions);
 
         private static BitmapImage? TryLoadBitmap(Uri uri)
         {

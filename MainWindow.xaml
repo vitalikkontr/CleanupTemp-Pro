@@ -9,18 +9,19 @@
         ResizeMode="CanResize"
         Icon="pack://application:,,,/app.ico"
         SnapsToDevicePixels="True"
-        UseLayoutRounding="True">
+        UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display"
+        TextOptions.TextRenderingMode="ClearType"
+        RenderOptions.BitmapScalingMode="LowQuality">
 
     <Grid>
-        <!-- Имитация тени слоями -->
-        <Border Margin="14" CornerRadius="20" Background="#55000000"/>
-        <Border Margin="11" CornerRadius="18" Background="#44000000"/>
-        <Border Margin="9"  CornerRadius="17" Background="#33000000"/>
-
-        <!-- Основной контейнер -->
-        <Border Margin="8" CornerRadius="16"
+        <!-- Основной контейнер с тенью через Effect вместо трёх слоёв Border -->
+        <Border Margin="14" CornerRadius="16"
                 Background="{StaticResource DarkBgBrush}"
                 BorderBrush="#1E1E4A" BorderThickness="1">
+            <Border.Effect>
+                <DropShadowEffect Color="#000000" BlurRadius="28" ShadowDepth="0" Opacity="0.7"/>
+            </Border.Effect>
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="60"/>
@@ -54,7 +55,10 @@
                         </Grid.ColumnDefinitions>
 
                         <!-- LOGO + TITLE -->
-                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center"
+                                    MouseEnter="TitleLogo_MouseEnter"
+                                    MouseLeave="TitleLogo_MouseLeave"
+                                    Cursor="Arrow">
                             <!--
                                 Скруглённые углы через OpacityMask (не ClipToBounds).
                                 Размер 48x48 — хорошо виден в заголовке.
@@ -81,7 +85,7 @@
                                 <TextBlock FontFamily="Segoe UI Semibold" FontSize="17"
                                            Foreground="{StaticResource TextPrimaryBrush}">
                                     <Run Text="Cleanup" Foreground="White"/>
-                                    <Run FontFamily="Segoe UI Light">
+                                    <Run x:Name="TitleRunTemp" FontFamily="Segoe UI Light">
                                         <Run.Foreground>
                                             <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
                                                 <GradientStop Color="#4A9EFF" Offset="0"/>
@@ -90,10 +94,10 @@
                                         </Run.Foreground>
                                         Temp
                                     </Run>
-                                    <Run Text=" Pro" Foreground="#06D6C7"
+                                    <Run x:Name="TitleRunPro" Text=" Pro" Foreground="#06D6C7"
                                          FontFamily="Segoe UI Semibold"/>
                                 </TextBlock>
-                                <TextBlock Text="System Cleaner v3.2.0"
+                                <TextBlock Text="System Cleaner v3.2.1"
                                            FontFamily="Segoe UI" FontSize="10"
                                            Foreground="{StaticResource TextSecondaryBrush}"
                                            Margin="0,1,0,0"/>
@@ -525,6 +529,121 @@
                         <Border Grid.Row="2" CornerRadius="14" Background="#0D0D1A"
                                 BorderBrush="#252550" BorderThickness="1">
                             <Grid>
+
+                        <!-- ═══ CHART OVERLAY — поверх табов после очистки ═══
+                             Visibility переключается из кода: Collapsed → Visible.
+                             Кнопка ← возвращает обратно к спискам. -->
+                        <Grid x:Name="ChartOverlay" Visibility="Collapsed"
+                              Background="#0D0D1A">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- Заголовок оверлея + кнопка назад -->
+                            <Border Grid.Row="0" CornerRadius="14,14,0,0"
+                                    Background="#13132B" BorderBrush="#252550"
+                                    BorderThickness="0,0,0,1" Padding="14,0">
+                                <Grid Height="44">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Border CornerRadius="6" Padding="8,4" Cursor="Hand"
+                                                Background="#1A2A4A"
+                                                MouseLeftButtonDown="ChartBack_Click"
+                                                MouseEnter="ChartBackBtn_Enter"
+                                                MouseLeave="ChartBackBtn_Leave">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="← " FontSize="11" Foreground="#4A9EFF"/>
+                                                <TextBlock Text="К результатам"
+                                                           FontFamily="Segoe UI" FontSize="11"
+                                                           Foreground="#4A9EFF"/>
+                                            </StackPanel>
+                                        </Border>
+                                        <TextBlock Text="📊  Отчёт по очистке"
+                                                   FontFamily="Segoe UI Semibold" FontSize="12"
+                                                   Foreground="#E8E8FF"
+                                                   VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+
+                            <!-- Тело: пирог + легенда -->
+                            <Grid Grid.Row="1" Margin="16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="200"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- Пирог с подписью в центре -->
+                                <Grid Grid.Column="0" VerticalAlignment="Center">
+                                    <Canvas x:Name="ChartCanvas" Width="180" Height="180"
+                                            HorizontalAlignment="Center"/>
+                                    <StackPanel VerticalAlignment="Center"
+                                                HorizontalAlignment="Center">
+                                        <TextBlock x:Name="ChartTotalValue"
+                                                   Text="0"
+                                                   FontFamily="Segoe UI Light" FontSize="22"
+                                                   Foreground="#06D6C7"
+                                                   HorizontalAlignment="Center"/>
+                                        <TextBlock Text="ОЧИЩЕНО"
+                                                   FontFamily="Segoe UI" FontSize="9"
+                                                   Foreground="#555577"
+                                                   HorizontalAlignment="Center"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- Легенда -->
+                                <ScrollViewer Grid.Column="1"
+                                              VerticalScrollBarVisibility="Auto"
+                                              HorizontalScrollBarVisibility="Disabled"
+                                              Style="{StaticResource ModernScrollViewer}"
+                                              Margin="16,0,0,0">
+                                    <ItemsControl x:Name="ChartLegend" VerticalAlignment="Center">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Padding="8,5" Margin="0,2"
+                                                        CornerRadius="7"
+                                                        Background="#13132B">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="10"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="70"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <Ellipse Grid.Column="0"
+                                                                 Width="8" Height="8"
+                                                                 VerticalAlignment="Center"
+                                                                 Fill="{Binding ColorBrush}"/>
+                                                        <TextBlock Grid.Column="1"
+                                                                   Text="{Binding Category}"
+                                                                   FontFamily="Segoe UI" FontSize="11"
+                                                                   Foreground="#C8C8EE"
+                                                                   VerticalAlignment="Center"
+                                                                   TextTrimming="CharacterEllipsis"
+                                                                   Margin="8,0,6,0"/>
+                                                        <TextBlock Grid.Column="2"
+                                                                   Text="{Binding PctText}"
+                                                                   FontFamily="Segoe UI" FontSize="10"
+                                                                   Foreground="#7070AA"
+                                                                   VerticalAlignment="Center"
+                                                                   Margin="0,0,6,0"/>
+                                                        <TextBlock Grid.Column="3"
+                                                                   Text="{Binding SizeText}"
+                                                                   FontFamily="Segoe UI Semibold" FontSize="11"
+                                                                   Foreground="{Binding ColorBrush}"
+                                                                   VerticalAlignment="Center"
+                                                                   HorizontalAlignment="Right"/>
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </Grid>
+                        </Grid>
+                        <Grid>
+                            <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="44"/>
                                     <RowDefinition Height="*"/>
@@ -569,6 +688,40 @@
                    VerticalAlignment="Center"/>
                                                 </StackPanel>
                                             </Border>
+
+                                            <Border x:Name="TabLargeHeader" CornerRadius="8"
+        Padding="14,6"
+        Background="Transparent" Cursor="Hand"
+        MouseLeftButtonDown="TabLarge_Click"
+        MouseEnter="TabHeader_MouseEnter" 
+        MouseLeave="TabHeader_MouseLeave">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="📦 " FontSize="12" VerticalAlignment="Center"/>
+                                                    <TextBlock x:Name="TabLargeText"
+                   Text="Большие файлы"
+                   FontFamily="Segoe UI"
+                   FontSize="12"
+                   Foreground="#8888BB"
+                   VerticalAlignment="Center"/>
+                                                </StackPanel>
+                                            </Border>
+
+                                            <Border x:Name="TabExclusionsHeader" CornerRadius="8"
+        Padding="14,6"
+        Background="Transparent" Cursor="Hand"
+        MouseLeftButtonDown="TabExclusions_Click"
+        MouseEnter="TabHeader_MouseEnter" 
+        MouseLeave="TabHeader_MouseLeave">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="🛡️ " FontSize="12" VerticalAlignment="Center"/>
+                                                    <TextBlock x:Name="TabExclusionsText"
+                   Text="Исключения"
+                   FontFamily="Segoe UI"
+                   FontSize="12"
+                   Foreground="#8888BB"
+                   VerticalAlignment="Center"/>
+                                                </StackPanel>
+                                            </Border>
                                         </StackPanel>
                                         <TextBlock x:Name="ListCountLabel"
                                                    HorizontalAlignment="Right"
@@ -584,8 +737,52 @@
                                                   HorizontalScrollBarVisibility="Disabled"
                                                   Style="{StaticResource ModernScrollViewer}"
                                                   Padding="8,6">
-                                        <ItemsControl x:Name="FileListView">
-                                            <ItemsControl.ItemTemplate>
+                                        <ListView x:Name="FileListView"
+                                                  Background="Transparent"
+                                                  BorderThickness="0"
+                                                  VirtualizingPanel.IsVirtualizing="True"
+                                                  VirtualizingPanel.VirtualizationMode="Recycling"
+                                                  VirtualizingPanel.ScrollUnit="Item"
+                                                  ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                  SelectionMode="Single"
+                                                  Focusable="False">
+                                            <!-- Контекстное меню: добавить в исключения -->
+                                            <ListView.ContextMenu>
+                                                <ContextMenu Background="#13132B" BorderBrush="#252550" BorderThickness="1">
+                                                    <MenuItem x:Name="MenuAddExclusion"
+                                                              Header="🛡️  Исключить из очистки"
+                                                              Click="AddExclusion_Click"
+                                                              Foreground="#E8E8FF"
+                                                              FontFamily="Segoe UI"
+                                                              FontSize="12"
+                                                              Background="Transparent"/>
+                                                    <MenuItem x:Name="MenuAddFolderExclusion"
+                                                              Header="📁  Исключить всю папку"
+                                                              Click="AddFolderExclusion_Click"
+                                                              Foreground="#E8E8FF"
+                                                              FontFamily="Segoe UI"
+                                                              FontSize="12"
+                                                              Background="Transparent"/>
+                                                </ContextMenu>
+                                            </ListView.ContextMenu>
+                                            <ListView.ItemContainerStyle>
+                                                <Style TargetType="ListViewItem">
+                                                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                                    <Setter Property="Padding" Value="0"/>
+                                                    <Setter Property="Margin" Value="0"/>
+                                                    <Setter Property="Background" Value="Transparent"/>
+                                                    <Setter Property="BorderThickness" Value="0"/>
+                                                    <Setter Property="Template">
+                                                        <Setter.Value>
+                                                            <ControlTemplate TargetType="ListViewItem">
+                                                                <ContentPresenter/>
+                                                            </ControlTemplate>
+                                                        </Setter.Value>
+                                                    </Setter>
+                                                </Style>
+                                            </ListView.ItemContainerStyle>
+                                            <ListView.ItemTemplate>
                                                 <DataTemplate>
                                                     <Border Margin="0,2" Padding="12,8"
                                                             CornerRadius="9"
@@ -627,8 +824,8 @@
                                                         </Grid>
                                                     </Border>
                                                 </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
+                                            </ListView.ItemTemplate>
+                                        </ListView>
                                     </ScrollViewer>
 
                                     <ScrollViewer x:Name="HistoryPanel"
@@ -679,7 +876,294 @@
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>
                                     </ScrollViewer>
+
+                                    <!-- ═══ ВКЛАДКА: БОЛЬШИЕ ФАЙЛЫ ═══ -->
+                                    <Grid x:Name="LargeFilesPanel" Visibility="Collapsed">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="*"/>
+                                        </Grid.RowDefinitions>
+
+                                        <!-- Панель управления: порог размера + кнопка поиска -->
+                                        <Border Grid.Row="0" Margin="8,8,8,4"
+                                                Background="#13132B" CornerRadius="9"
+                                                BorderBrush="#252550" BorderThickness="1"
+                                                Padding="12,8">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0"
+                                                           Text="Минимальный размер:"
+                                                           FontFamily="Segoe UI" FontSize="11"
+                                                           Foreground="#8888BB"
+                                                           VerticalAlignment="Center"
+                                                           Margin="0,0,8,0"/>
+                                                <ComboBox x:Name="LargeSizeThreshold"
+                                                          Grid.Column="1"
+                                                          Width="100"
+                                                          FontFamily="Segoe UI" FontSize="11"
+                                                          Background="#0D0D1A"
+                                                          Foreground="#E8E8FF"
+                                                          BorderBrush="#252550"
+                                                          SelectedIndex="1">
+                                                    <ComboBoxItem Content="100 МБ" Tag="104857600"/>
+                                                    <ComboBoxItem Content="500 МБ" Tag="524288000"/>
+                                                    <ComboBoxItem Content="1 ГБ"   Tag="1073741824"/>
+                                                    <ComboBoxItem Content="2 ГБ"   Tag="2147483648"/>
+                                                    <ComboBoxItem Content="5 ГБ"   Tag="5368709120"/>
+                                                </ComboBox>
+                                                <TextBlock x:Name="LargeFilesStatus"
+                                                           Grid.Column="2"
+                                                           FontFamily="Segoe UI" FontSize="11"
+                                                           Foreground="#8888BB"
+                                                           VerticalAlignment="Center"
+                                                           Margin="12,0,0,0"
+                                                           TextTrimming="CharacterEllipsis"/>
+                                                <Border Grid.Column="3"
+                                                        x:Name="LargeScanBtnBorder"
+                                                        CornerRadius="7" Padding="14,5"
+                                                        Cursor="Hand"
+                                                        MouseLeftButtonDown="LargeScan_Click"
+                                                        MouseEnter="LargeScanBtn_Enter"
+                                                        MouseLeave="LargeScanBtn_Leave">
+                                                    <Border.Background>
+                                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                                            <GradientStop Color="#A855F7" Offset="0"/>
+                                                            <GradientStop Color="#4A9EFF" Offset="1"/>
+                                                        </LinearGradientBrush>
+                                                    </Border.Background>
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="🔍 " FontSize="11" Foreground="White"/>
+                                                        <TextBlock Text="Найти" FontFamily="Segoe UI Semibold"
+                                                                   FontSize="11" Foreground="White"/>
+                                                    </StackPanel>
+                                                </Border>
+                                            </Grid>
+                                        </Border>
+
+                                        <!-- Список больших файлов -->
+                                        <ScrollViewer Grid.Row="1"
+                                                      VerticalScrollBarVisibility="Auto"
+                                                      HorizontalScrollBarVisibility="Disabled"
+                                                      Style="{StaticResource ModernScrollViewer}"
+                                                      Padding="8,4">
+                                            <ListView x:Name="LargeFilesListView"
+                                                      Background="Transparent"
+                                                      BorderThickness="0"
+                                                      VirtualizingPanel.IsVirtualizing="True"
+                                                      VirtualizingPanel.VirtualizationMode="Recycling"
+                                                      VirtualizingPanel.ScrollUnit="Item"
+                                                      ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                      SelectionMode="Single"
+                                                      Focusable="False">
+                                                <ListView.ContextMenu>
+                                                    <ContextMenu Background="#13132B" BorderBrush="#252550" BorderThickness="1">
+                                                        <MenuItem Header="📂  Открыть папку"
+                                                                  Click="LargeFile_OpenFolder"
+                                                                  Foreground="#E8E8FF"
+                                                                  FontFamily="Segoe UI" FontSize="12"
+                                                                  Background="Transparent"/>
+                                                        <MenuItem Header="🗑️  Удалить файл"
+                                                                  Click="LargeFile_Delete"
+                                                                  Foreground="#FF4A6A"
+                                                                  FontFamily="Segoe UI" FontSize="12"
+                                                                  Background="Transparent"/>
+                                                    </ContextMenu>
+                                                </ListView.ContextMenu>
+                                                <ListView.ItemContainerStyle>
+                                                    <Style TargetType="ListViewItem">
+                                                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                                        <Setter Property="Padding" Value="0"/>
+                                                        <Setter Property="Margin" Value="0"/>
+                                                        <Setter Property="Background" Value="Transparent"/>
+                                                        <Setter Property="BorderThickness" Value="0"/>
+                                                        <Setter Property="Template">
+                                                            <Setter.Value>
+                                                                <ControlTemplate TargetType="ListViewItem">
+                                                                    <ContentPresenter/>
+                                                                </ControlTemplate>
+                                                            </Setter.Value>
+                                                        </Setter>
+                                                    </Style>
+                                                </ListView.ItemContainerStyle>
+                                                <ListView.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border Margin="0,2" Padding="12,9"
+                                                                CornerRadius="9"
+                                                                Background="#13132B">
+                                                            <Grid>
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="24"/>
+                                                                    <ColumnDefinition Width="*"/>
+                                                                    <ColumnDefinition Width="90"/>
+                                                                    <ColumnDefinition Width="80"/>
+                                                                </Grid.ColumnDefinitions>
+                                                                <TextBlock Grid.Column="0"
+                                                                           Text="{Binding Icon}"
+                                                                           FontSize="13"
+                                                                           VerticalAlignment="Center"/>
+                                                                <StackPanel Grid.Column="1" Margin="8,0">
+                                                                    <TextBlock Text="{Binding FileName}"
+                                                                               FontFamily="Segoe UI Semibold"
+                                                                               FontSize="11"
+                                                                               Foreground="#E8E8FF"
+                                                                               TextTrimming="CharacterEllipsis"/>
+                                                                    <TextBlock Text="{Binding Path}"
+                                                                               FontFamily="Consolas"
+                                                                               FontSize="10"
+                                                                               Foreground="#7070AA"
+                                                                               TextTrimming="CharacterEllipsis"/>
+                                                                </StackPanel>
+                                                                <TextBlock Grid.Column="2"
+                                                                           Text="{Binding Category}"
+                                                                           FontFamily="Segoe UI"
+                                                                           FontSize="10"
+                                                                           Foreground="#7070AA"
+                                                                           VerticalAlignment="Center"
+                                                                           TextTrimming="CharacterEllipsis"
+                                                                           Margin="0,0,6,0"/>
+                                                                <TextBlock Grid.Column="3"
+                                                                           Text="{Binding SizeText}"
+                                                                           FontFamily="Segoe UI Semibold"
+                                                                           FontSize="12"
+                                                                           Foreground="#FF8C00"
+                                                                           VerticalAlignment="Center"
+                                                                           HorizontalAlignment="Right"/>
+                                                            </Grid>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ListView.ItemTemplate>
+                                            </ListView>
+                                        </ScrollViewer>
+                                    </Grid>
+
+                                    <!-- ═══ ВКЛАДКА: ИСКЛЮЧЕНИЯ ═══ -->
+                                    <Grid x:Name="ExclusionsPanel" Visibility="Collapsed">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="*"/>
+                                        </Grid.RowDefinitions>
+
+                                        <!-- Кнопка: добавить вручную + подсказка -->
+                                        <Border Grid.Row="0" Margin="8,8,8,4"
+                                                Background="#13132B" CornerRadius="9"
+                                                BorderBrush="#252550" BorderThickness="1"
+                                                Padding="12,8">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0"
+                                                           Text="Файлы и папки в этом списке никогда не будут удалены"
+                                                           FontFamily="Segoe UI" FontSize="11"
+                                                           Foreground="#8888BB"
+                                                           VerticalAlignment="Center"/>
+                                                <Border Grid.Column="1"
+                                                        x:Name="AddExclusionManualBtn"
+                                                        CornerRadius="7" Padding="12,5"
+                                                        Cursor="Hand" Margin="0,0,6,0"
+                                                        MouseLeftButtonDown="AddExclusionManual_Click"
+                                                        MouseEnter="ExclusionBtn_Enter"
+                                                        MouseLeave="ExclusionBtn_Leave">
+                                                    <Border.Background>
+                                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                                            <GradientStop Color="#1A2A4A" Offset="0"/>
+                                                            <GradientStop Color="#1A1A3A" Offset="1"/>
+                                                        </LinearGradientBrush>
+                                                    </Border.Background>
+                                                    <Border.BorderBrush>
+                                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                                            <GradientStop Color="#4A9EFF" Offset="0"/>
+                                                            <GradientStop Color="#A855F7" Offset="1"/>
+                                                        </LinearGradientBrush>
+                                                    </Border.BorderBrush>
+                                                    <Border.BorderThickness>1</Border.BorderThickness>
+                                                    <TextBlock Text="+ Добавить путь"
+                                                               FontFamily="Segoe UI Semibold"
+                                                               FontSize="11" Foreground="#4A9EFF"/>
+                                                </Border>
+                                                <Border Grid.Column="2"
+                                                        x:Name="ClearExclusionsBtn"
+                                                        CornerRadius="7" Padding="12,5"
+                                                        Cursor="Hand"
+                                                        MouseLeftButtonDown="ClearExclusions_Click"
+                                                        MouseEnter="ExclusionBtn_Enter"
+                                                        MouseLeave="ExclusionBtn_Leave">
+                                                    <Border.Background>
+                                                        <SolidColorBrush Color="#1A0A0A"/>
+                                                    </Border.Background>
+                                                    <Border.BorderBrush>
+                                                        <SolidColorBrush Color="#3A1A1A"/>
+                                                    </Border.BorderBrush>
+                                                    <Border.BorderThickness>1</Border.BorderThickness>
+                                                    <TextBlock Text="🗑 Очистить всё"
+                                                               FontFamily="Segoe UI Semibold"
+                                                               FontSize="11" Foreground="#FF4A6A"/>
+                                                </Border>
+                                            </Grid>
+                                        </Border>
+
+                                        <!-- Список исключений -->
+                                        <ScrollViewer Grid.Row="1"
+                                                      VerticalScrollBarVisibility="Auto"
+                                                      HorizontalScrollBarVisibility="Disabled"
+                                                      Style="{StaticResource ModernScrollViewer}"
+                                                      Padding="8,4">
+                                            <ItemsControl x:Name="ExclusionsListView">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border Margin="0,2" Padding="12,8"
+                                                                CornerRadius="9"
+                                                                Background="#13132B">
+                                                            <Grid>
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="24"/>
+                                                                    <ColumnDefinition Width="*"/>
+                                                                    <ColumnDefinition Width="Auto"/>
+                                                                </Grid.ColumnDefinitions>
+                                                                <TextBlock Grid.Column="0"
+                                                                           Text="{Binding Icon}"
+                                                                           FontSize="13"
+                                                                           VerticalAlignment="Center"/>
+                                                                <TextBlock Grid.Column="1"
+                                                                           Text="{Binding Path}"
+                                                                           FontFamily="Consolas"
+                                                                           FontSize="11"
+                                                                           Foreground="#C8C8EE"
+                                                                           VerticalAlignment="Center"
+                                                                           Margin="8,0"
+                                                                           TextTrimming="CharacterEllipsis"
+                                                                           ToolTip="{Binding Path}"/>
+                                                                <Border Grid.Column="2"
+                                                                        CornerRadius="5"
+                                                                        Padding="8,3"
+                                                                        Cursor="Hand"
+                                                                        Tag="{Binding Path}"
+                                                                        MouseLeftButtonDown="RemoveExclusion_Click"
+                                                                        Background="#2A0A0A"
+                                                                        BorderBrush="#3A1010"
+                                                                        BorderThickness="1">
+                                                                    <TextBlock Text="✕"
+                                                                               FontSize="10"
+                                                                               Foreground="#FF4A6A"/>
+                                                                </Border>
+                                                            </Grid>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </ScrollViewer>
+                                    </Grid>
                                 </Grid>
+                            </Grid>
+                        </Grid>
                             </Grid>
                         </Border>
                     </Grid>
@@ -690,7 +1174,7 @@
                         Background="#0A0A18" BorderBrush="#1A1A3A"
                         BorderThickness="0,1,0,0">
                     <Grid Margin="20,0">
-                        <TextBlock Text="CleanupTemp Pro v3.2.0  •  Запускайте от имени администратора для полной очистки"
+                        <TextBlock Text="CleanupTemp Pro v3.2.1  •  Запускайте от имени администратора для полной очистки"
                                    FontFamily="Segoe UI" FontSize="11"
                                    Foreground="#3A3A6A" VerticalAlignment="Center"/>
                         <TextBlock Text="© 2026 CleanupTemp Pro"
@@ -703,7 +1187,7 @@
                 <!-- BG GLOW ORBS -->
                 <Canvas Grid.RowSpan="3" IsHitTestVisible="False" ClipToBounds="True">
                     <Ellipse Canvas.Left="-180" Canvas.Top="-180"
-                             Width="500" Height="500" Opacity="0.025">
+                             Width="500" Height="500" Opacity="0.12">
                         <Ellipse.Fill>
                             <RadialGradientBrush>
                                 <GradientStop Color="#4A9EFF" Offset="0"/>
@@ -711,9 +1195,9 @@
                             </RadialGradientBrush>
                         </Ellipse.Fill>
                     </Ellipse>
-                    <!-- Декоративный orb справа снизу — позиция через Left/Top от края окна -->
+                    <!-- Декоративный orb справа снизу -->
                     <Ellipse Canvas.Left="760" Canvas.Top="420"
-                             Width="600" Height="600" Opacity="0.025">
+                             Width="600" Height="600" Opacity="0.14">
                         <Ellipse.Fill>
                             <RadialGradientBrush>
                                 <GradientStop Color="#A855F7" Offset="0"/>
