@@ -12,9 +12,9 @@
 
     <!-- НЕТ DropShadowEffect нигде — тень через слои -->
     <Grid>
-        <Border Margin="12" CornerRadius="22" Background="#55000000"/>
-        <Border Margin="9"  CornerRadius="20" Background="#44000000"/>
-        <Border Margin="6"  CornerRadius="19" Background="#33000000"/>
+        <Border Margin="12" CornerRadius="22" Background="#55000000" IsHitTestVisible="False"/>
+        <Border Margin="9"  CornerRadius="20" Background="#44000000" IsHitTestVisible="False"/>
+        <Border Margin="6"  CornerRadius="19" Background="#33000000" IsHitTestVisible="False"/>
 
         <!-- Основной контейнер — БЕЗ Effect -->
         <Border Margin="4" CornerRadius="18"
@@ -55,10 +55,14 @@
                             VerticalAlignment="Center" Margin="30,50,30,30">
 
                     <!-- Логотип — кольцо через BorderThickness + OpacityMask -->
-                    <Border HorizontalAlignment="Center" Margin="0,0,0,22"
+                    <Border x:Name="LogoBorder"
+                            HorizontalAlignment="Center" Margin="0,0,0,22"
                             Width="130" Height="130"
                             CornerRadius="32" BorderThickness="2.5"
-                            SnapsToDevicePixels="True" UseLayoutRounding="True">
+                            SnapsToDevicePixels="True" UseLayoutRounding="True"
+                            MouseEnter="Logo_MouseEnter"
+                            MouseLeave="Logo_MouseLeave"
+                            Cursor="Arrow">
                         <Border.BorderBrush>
                             <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
                                 <GradientStop Color="#4A9EFF" Offset="0"/>
@@ -89,11 +93,16 @@
                     </Border>
 
                     <!-- Title -->
-                    <TextBlock HorizontalAlignment="Center" Margin="0,0,0,4">
-                        <Run Text="CleanupTemp "
+                    <TextBlock HorizontalAlignment="Center" Margin="0,0,0,4"
+                               MouseEnter="Title_MouseEnter"
+                               MouseLeave="Title_MouseLeave"
+                               Cursor="Arrow">
+                        <Run x:Name="AboutRunCleanup"
+                             Text="CleanupTemp "
                              FontFamily="Segoe UI Semibold"
                              FontSize="28" Foreground="#E8E8FF"/>
-                        <Run Text="Pro"
+                        <Run x:Name="AboutRunPro"
+                             Text="Pro"
                              FontFamily="Segoe UI Semibold" FontSize="28">
                             <Run.Foreground>
                                 <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
@@ -105,7 +114,7 @@
                         </Run>
                     </TextBlock>
 
-                    <TextBlock Text="Версия 3.2.0"
+                    <TextBlock Text="Версия 3.2.1"
                                FontFamily="Segoe UI" FontSize="13"
                                Foreground="#6060C0"
                                HorizontalAlignment="Center" Margin="0,0,0,22"/>

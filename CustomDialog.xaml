@@ -34,9 +34,9 @@
 
     <Grid>
         <!-- Слои тени -->
-        <Border Margin="12" CornerRadius="22" Background="#55000000"/>
-        <Border Margin="9"  CornerRadius="20" Background="#44000000"/>
-        <Border Margin="6"  CornerRadius="19" Background="#33000000"/>
+        <Border Margin="12" CornerRadius="22" Background="#55000000" IsHitTestVisible="False"/>
+        <Border Margin="9"  CornerRadius="20" Background="#44000000" IsHitTestVisible="False"/>
+        <Border Margin="6"  CornerRadius="19" Background="#33000000" IsHitTestVisible="False"/>
 
         <Border Margin="4" CornerRadius="18" BorderBrush="#2A2A5A" BorderThickness="1">
             <Border.Background>
