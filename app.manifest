@@ -25,11 +25,11 @@
     </application>
   </compatibility>
 
-  <application xmlns="urn:schemas-microsoft-com:asm.v3">
-    <windowsSettings>
-      <!-- Высокое DPI — чёткий интерфейс на любом мониторе -->
-      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/PM</dpiAware>
-      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
-    </windowsSettings>
-  </application>
+  <!--
+    Блок <dpiAware> / <dpiAwareness> удалён.
+    DPI-режим управляется через свойство проекта ApplicationHighDpiMode
+    в CleanupTemp_Pro.csproj — это рекомендованный способ для .NET 6+.
+    Оставлять оба источника одновременно вызывает предупреждение WFAC010.
+  -->
+
 </assembly>

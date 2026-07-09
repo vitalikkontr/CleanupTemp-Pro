@@ -19,6 +19,10 @@ namespace CleanupTemp_Pro
         {
             InitializeComponent();
             LoadLogo();
+            // Запускаем постоянный шиммер после загрузки XAML-дерева.
+            Loaded += (_, _) => StartTitleShimmer();
+            // Постоянный glow на иконке — тоже после Loaded.
+            Loaded += (_, _) => StartLogoShimmer();
         }
 
         private void LoadLogo()
@@ -64,13 +68,16 @@ namespace CleanupTemp_Pro
 
         private void CloseBorder_Click(object sender, MouseButtonEventArgs e) => Close();
 
-        // ── Shimmer / Glow при наведении ─────────────────────────────
+        // ── Постоянный Shimmer / Glow ─────────────────────────────────
 
-        private DoubleAnimation? _shimmerAnim;
-        private DoubleAnimation? _shimmerAnim2;
-        private DoubleAnimation? _logoGlowAnim;
+        // Храним ссылки на кисти — нужны чтобы при необходимости остановить
+        // анимацию через BeginAnimation(prop, null).
+        private LinearGradientBrush? _shimmerBrush1;
+        private LinearGradientBrush? _shimmerBrush2;
+        private System.Windows.Media.Effects.DropShadowEffect? _logoGlow;
 
-        private void Title_MouseEnter(object sender, MouseEventArgs e)
+        /// <summary>Запускает постоянное переливание на тексте «CleanupTemp» и «Pro».</summary>
+        private void StartTitleShimmer()
         {
             // Shimmer на «CleanupTemp»
             var b1 = new LinearGradientBrush();
@@ -79,14 +86,15 @@ namespace CleanupTemp_Pro
             b1.GradientStops.Add(new GradientStop(Color.FromRgb(0xE8, 0xE8, 0xFF), 0.0));
             b1.GradientStops.Add(new GradientStop(Color.FromRgb(0xFF, 0xFF, 0xFF), 0.5));
             b1.GradientStops.Add(new GradientStop(Color.FromRgb(0xA0, 0xC8, 0xFF), 1.0));
+            _shimmerBrush1 = b1;
             AboutRunCleanup.Foreground = b1;
 
-            _shimmerAnim = new DoubleAnimation(-0.5, 1.5, TimeSpan.FromMilliseconds(950))
+            var anim1 = new DoubleAnimation(-0.5, 1.5, TimeSpan.FromMilliseconds(1400))
             {
                 RepeatBehavior = RepeatBehavior.Forever,
                 EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
             };
-            b1.GradientStops[1].BeginAnimation(GradientStop.OffsetProperty, _shimmerAnim);
+            b1.GradientStops[1].BeginAnimation(GradientStop.OffsetProperty, anim1);
 
             // Shimmer на «Pro» — радужный переход
             var b2 = new LinearGradientBrush();
@@ -95,78 +103,65 @@ namespace CleanupTemp_Pro
             b2.GradientStops.Add(new GradientStop(Color.FromRgb(0x5A, 0xBA, 0xFF), 0.0));
             b2.GradientStops.Add(new GradientStop(Color.FromRgb(0xFF, 0xFF, 0xFF), 0.5));
             b2.GradientStops.Add(new GradientStop(Color.FromRgb(0x00, 0xE5, 0xD0), 1.0));
+            _shimmerBrush2 = b2;
             AboutRunPro.Foreground = b2;
 
-            _shimmerAnim2 = new DoubleAnimation(-0.5, 1.5, TimeSpan.FromMilliseconds(950))
+            var anim2 = new DoubleAnimation(-0.5, 1.5, TimeSpan.FromMilliseconds(1400))
             {
                 RepeatBehavior = RepeatBehavior.Forever,
-                BeginTime      = TimeSpan.FromMilliseconds(200),
+                BeginTime      = TimeSpan.FromMilliseconds(300),
                 EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
             };
-            b2.GradientStops[1].BeginAnimation(GradientStop.OffsetProperty, _shimmerAnim2);
+            b2.GradientStops[1].BeginAnimation(GradientStop.OffsetProperty, anim2);
         }
 
-        private void Title_MouseLeave(object sender, MouseEventArgs e)
-        {
-            _shimmerAnim?.SetValue(Timeline.BeginTimeProperty, null);
-            _shimmerAnim2?.SetValue(Timeline.BeginTimeProperty, null);
-
-            AboutRunCleanup.Foreground = new SolidColorBrush(Color.FromRgb(0xE8, 0xE8, 0xFF));
-
-            var origPro = new LinearGradientBrush();
-            origPro.StartPoint = new System.Windows.Point(0, 0);
-            origPro.EndPoint   = new System.Windows.Point(1, 0);
-            origPro.GradientStops.Add(new GradientStop(Color.FromRgb(0x5A, 0xBA, 0xFF), 0.0));
-            origPro.GradientStops.Add(new GradientStop(Color.FromRgb(0xB0, 0x6E, 0xFF), 0.5));
-            origPro.GradientStops.Add(new GradientStop(Color.FromRgb(0x00, 0xE5, 0xD0), 1.0));
-            origPro.Freeze();
-            AboutRunPro.Foreground = origPro;
-        }
-
-        private void Logo_MouseEnter(object sender, MouseEventArgs e)
+        /// <summary>Запускает постоянный пульсирующий glow на логотипе и рамке.</summary>
+        private void StartLogoShimmer()
         {
             // Пульсирующий glow на иконке
-            _logoGlowAnim = new DoubleAnimation(10, 28, TimeSpan.FromMilliseconds(700))
+            var glowAnim = new DoubleAnimation(8, 26, TimeSpan.FromMilliseconds(1200))
             {
                 AutoReverse    = true,
                 RepeatBehavior = RepeatBehavior.Forever,
                 EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
             };
-            var glow = new System.Windows.Media.Effects.DropShadowEffect
+            _logoGlow = new System.Windows.Media.Effects.DropShadowEffect
             {
                 Color       = Color.FromRgb(0x4A, 0x9E, 0xFF),
                 ShadowDepth = 0,
-                Opacity     = 0.9,
-                BlurRadius  = 10,
+                Opacity     = 0.85,
+                BlurRadius  = 8,
             };
-            LogoImage.Effect = glow;
-            glow.BeginAnimation(
-                System.Windows.Media.Effects.DropShadowEffect.BlurRadiusProperty,
-                _logoGlowAnim);
+            LogoImage.Effect = _logoGlow;
+            _logoGlow.BeginAnimation(
+                System.Windows.Media.Effects.DropShadowEffect.BlurRadiusProperty, glowAnim);
 
-            // Анимируем вращение градиента рамки — меняем цвет первого стопа
+            // Пульсация цвета первого стопа рамки логотипа
             if (LogoBorder.BorderBrush is LinearGradientBrush borderBrush)
             {
                 var colorAnim = new ColorAnimation(
                     Color.FromRgb(0x00, 0xE5, 0xD0),
                     Color.FromRgb(0x4A, 0x9E, 0xFF),
-                    TimeSpan.FromMilliseconds(800))
+                    TimeSpan.FromMilliseconds(1000))
                 {
                     AutoReverse    = true,
                     RepeatBehavior = RepeatBehavior.Forever,
                 };
-                borderBrush.GradientStops[0].BeginAnimation(
-                    GradientStop.ColorProperty, colorAnim);
+                borderBrush.GradientStops[0].BeginAnimation(GradientStop.ColorProperty, colorAnim);
             }
         }
 
+        // Hover-обработчики для названия и логотипа — теперь заглушки,
+        // анимация запущена постоянно. XAML-привязки сохранены.
+        private void Title_MouseEnter(object sender, MouseEventArgs e) { }
+        private void Title_MouseLeave(object sender, MouseEventArgs e) { }
+        private void Logo_MouseEnter(object sender, MouseEventArgs e)  { }
+
         private void Logo_MouseLeave(object sender, MouseEventArgs e)
         {
-            LogoImage.Effect = null;
-
-            // Сброс анимации рамки
-            if (LogoBorder.BorderBrush is LinearGradientBrush borderBrush)
-                borderBrush.GradientStops[0].BeginAnimation(GradientStop.ColorProperty, null);
+            // BUG FIX: раньше здесь обнулялась ссылка _logoGlow без остановки анимации,
+            // что приводило к утечке — анимация продолжала работать на уже «забытом» объекте.
+            // Теперь анимация постоянная, метод оставлен пустым для совместимости с XAML.
         }
         private void CloseBorder_Enter(object sender, MouseEventArgs e)
         {

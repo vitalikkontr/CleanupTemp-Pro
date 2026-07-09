@@ -1,7 +1,7 @@
 <Window x:Class="CleanupTemp_Pro.AboutWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="О программе" Height="620" Width="460"
+        Title="О программе" Height="500" Width="400"
         WindowStartupLocation="CenterOwner"
         Background="Transparent"
         WindowStyle="None" AllowsTransparency="True"
@@ -10,15 +10,14 @@
         SnapsToDevicePixels="True"
         UseLayoutRounding="True">
 
-    <!-- НЕТ DropShadowEffect нигде — тень через слои -->
+    <!-- Тень через слои Border — без DropShadowEffect -->
     <Grid>
         <Border Margin="12" CornerRadius="22" Background="#55000000" IsHitTestVisible="False"/>
         <Border Margin="9"  CornerRadius="20" Background="#44000000" IsHitTestVisible="False"/>
         <Border Margin="6"  CornerRadius="19" Background="#33000000" IsHitTestVisible="False"/>
 
-        <!-- Основной контейнер — БЕЗ Effect -->
-        <Border Margin="4" CornerRadius="18"
-                BorderThickness="1">
+        <!-- Основной контейнер -->
+        <Border Margin="4" CornerRadius="18" BorderThickness="1">
             <Border.BorderBrush>
                 <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
                     <GradientStop Color="#3A4A8A" Offset="0"/>
@@ -34,17 +33,17 @@
             </Border.Background>
 
             <Grid>
-                <!-- Кнопка закрыть — Border, без Effect -->
+                <!-- Кнопка закрыть — верхний уровень Grid, без ZIndex -->
                 <Border x:Name="CloseBtnBorder"
                         HorizontalAlignment="Right" VerticalAlignment="Top"
-                        Width="34" Height="34" Margin="0,12,12,0"
-                        CornerRadius="8" Background="Transparent"
+                        Width="28" Height="28" Margin="0,10,10,0"
+                        CornerRadius="7" Background="Transparent"
                         BorderBrush="Transparent" BorderThickness="1"
-                        Cursor="Hand" Panel.ZIndex="10"
+                        Cursor="Hand"
                         MouseLeftButtonDown="CloseBorder_Click"
                         MouseEnter="CloseBorder_Enter"
                         MouseLeave="CloseBorder_Leave">
-                    <TextBlock Text="✕" FontSize="14"
+                    <TextBlock Text="✕" FontSize="12"
                                FontFamily="Segoe UI"
                                Foreground="#FF4A6A"
                                HorizontalAlignment="Center"
@@ -52,17 +51,17 @@
                 </Border>
 
                 <StackPanel HorizontalAlignment="Center"
-                            VerticalAlignment="Center" Margin="30,50,30,30">
+                            VerticalAlignment="Center" Margin="28,40,28,24">
 
-                    <!-- Логотип — кольцо через BorderThickness + OpacityMask -->
+                    <!-- Логотип -->
                     <Border x:Name="LogoBorder"
-                            HorizontalAlignment="Center" Margin="0,0,0,22"
-                            Width="130" Height="130"
-                            CornerRadius="32" BorderThickness="2.5"
+                            HorizontalAlignment="Center" Margin="0,0,0,16"
+                            Width="96" Height="96"
+                            CornerRadius="24" BorderThickness="2"
                             SnapsToDevicePixels="True" UseLayoutRounding="True"
                             MouseEnter="Logo_MouseEnter"
                             MouseLeave="Logo_MouseLeave"
-                            Cursor="Arrow">
+                            Cursor="Hand">
                         <Border.BorderBrush>
                             <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
                                 <GradientStop Color="#4A9EFF" Offset="0"/>
@@ -73,14 +72,16 @@
                         <Border.Background>
                             <SolidColorBrush Color="Transparent"/>
                         </Border.Background>
-                        <!-- Логотип с скруглёнными углами -->
-                        <Border CornerRadius="28"
+                        <Border CornerRadius="21"
                                 SnapsToDevicePixels="True" UseLayoutRounding="True">
                             <Border.OpacityMask>
-                                <VisualBrush>
+                                <VisualBrush Stretch="Fill"
+                                             ViewboxUnits="RelativeToBoundingBox"
+                                             ViewportUnits="RelativeToBoundingBox"
+                                             Viewbox="0,0,1,1" Viewport="0,0,1,1">
                                     <VisualBrush.Visual>
-                                        <Border Width="124" Height="124"
-                                                CornerRadius="28" Background="Black"/>
+                                        <Border Width="90" Height="90"
+                                                CornerRadius="21" Background="Black"/>
                                     </VisualBrush.Visual>
                                 </VisualBrush>
                             </Border.OpacityMask>
@@ -88,22 +89,27 @@
                                    RenderOptions.BitmapScalingMode="HighQuality"
                                    SnapsToDevicePixels="True"
                                    UseLayoutRounding="True"
-                                   Stretch="UniformToFill"/>
+                                   Stretch="UniformToFill">
+                                <Image.Source>
+                                    <BitmapImage UriSource="pack://application:,,,/app.ico"
+                                                 CreateOptions="IgnoreImageCache"/>
+                                </Image.Source>
+                            </Image>
                         </Border>
                     </Border>
 
                     <!-- Title -->
-                    <TextBlock HorizontalAlignment="Center" Margin="0,0,0,4"
+                    <TextBlock HorizontalAlignment="Center" Margin="0,0,0,3"
                                MouseEnter="Title_MouseEnter"
                                MouseLeave="Title_MouseLeave"
-                               Cursor="Arrow">
+                               Cursor="Hand">
                         <Run x:Name="AboutRunCleanup"
                              Text="CleanupTemp "
                              FontFamily="Segoe UI Semibold"
-                             FontSize="28" Foreground="#E8E8FF"/>
+                             FontSize="22" Foreground="#E8E8FF"/>
                         <Run x:Name="AboutRunPro"
                              Text="Pro"
-                             FontFamily="Segoe UI Semibold" FontSize="28">
+                             FontFamily="Segoe UI Semibold" FontSize="22">
                             <Run.Foreground>
                                 <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
                                     <GradientStop Color="#5ABAFF" Offset="0"/>
@@ -114,13 +120,13 @@
                         </Run>
                     </TextBlock>
 
-                    <TextBlock Text="Версия 3.2.1"
-                               FontFamily="Segoe UI" FontSize="13"
+                    <TextBlock Text="Версия 3.2.2.0"
+                               FontFamily="Segoe UI" FontSize="11"
                                Foreground="#6060C0"
-                               HorizontalAlignment="Center" Margin="0,0,0,22"/>
+                               HorizontalAlignment="Center" Margin="0,0,0,16"/>
 
-                    <!-- Divider -->
-                    <Border Height="1" Margin="0,0,0,20">
+                    <!-- Divider 1 -->
+                    <Border Height="1" Margin="0,0,0,14">
                         <Border.Background>
                             <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
                                 <GradientStop Color="Transparent" Offset="0"/>
@@ -134,75 +140,75 @@
                     </Border>
 
                     <!-- Feature list -->
-                    <StackPanel Margin="0,0,0,24">
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                            <Border Width="28" Height="28" CornerRadius="8" Margin="0,0,12,0">
+                    <StackPanel Margin="0,0,0,16">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,7">
+                            <Border Width="24" Height="24" CornerRadius="7" Margin="0,0,10,0">
                                 <Border.Background>
                                     <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
                                         <GradientStop Color="#1A3A80" Offset="0"/>
                                         <GradientStop Color="#3A1A70" Offset="1"/>
                                     </LinearGradientBrush>
                                 </Border.Background>
-                                <TextBlock Text="🔍" FontSize="13"
+                                <TextBlock Text="🔍" FontSize="11"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"/>
                             </Border>
                             <TextBlock Text="Автоматическое сканирование 9 категорий"
-                                       FontFamily="Segoe UI" FontSize="13"
+                                       FontFamily="Segoe UI" FontSize="12"
                                        Foreground="#B8B8E0" VerticalAlignment="Center"/>
                         </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                            <Border Width="28" Height="28" CornerRadius="8" Margin="0,0,12,0">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,7">
+                            <Border Width="24" Height="24" CornerRadius="7" Margin="0,0,10,0">
                                 <Border.Background>
                                     <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
                                         <GradientStop Color="#450A20" Offset="0"/>
                                         <GradientStop Color="#6A1A30" Offset="1"/>
                                     </LinearGradientBrush>
                                 </Border.Background>
-                                <TextBlock Text="🧹" FontSize="13"
+                                <TextBlock Text="🧹" FontSize="11"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"/>
                             </Border>
                             <TextBlock Text="Глубокая очистка + корзина Windows"
-                                       FontFamily="Segoe UI" FontSize="13"
+                                       FontFamily="Segoe UI" FontSize="12"
                                        Foreground="#B8B8E0" VerticalAlignment="Center"/>
                         </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                            <Border Width="28" Height="28" CornerRadius="8" Margin="0,0,12,0">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,7">
+                            <Border Width="24" Height="24" CornerRadius="7" Margin="0,0,10,0">
                                 <Border.Background>
                                     <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
                                         <GradientStop Color="#083028" Offset="0"/>
                                         <GradientStop Color="#105A40" Offset="1"/>
                                     </LinearGradientBrush>
                                 </Border.Background>
-                                <TextBlock Text="🌐" FontSize="13"
+                                <TextBlock Text="🌐" FontSize="11"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"/>
                             </Border>
                             <TextBlock Text="Chrome, Edge, Firefox, Brave, Yandex"
-                                       FontFamily="Segoe UI" FontSize="13"
+                                       FontFamily="Segoe UI" FontSize="12"
                                        Foreground="#B8B8E0" VerticalAlignment="Center"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal">
-                            <Border Width="28" Height="28" CornerRadius="8" Margin="0,0,12,0">
+                            <Border Width="24" Height="24" CornerRadius="7" Margin="0,0,10,0">
                                 <Border.Background>
                                     <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
                                         <GradientStop Color="#302808" Offset="0"/>
                                         <GradientStop Color="#504010" Offset="1"/>
                                     </LinearGradientBrush>
                                 </Border.Background>
-                                <TextBlock Text="📊" FontSize="13"
+                                <TextBlock Text="📊" FontSize="11"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"/>
                             </Border>
                             <TextBlock Text="История очисток и статистика"
-                                       FontFamily="Segoe UI" FontSize="13"
+                                       FontFamily="Segoe UI" FontSize="12"
                                        Foreground="#B8B8E0" VerticalAlignment="Center"/>
                         </StackPanel>
                     </StackPanel>
 
                     <!-- Divider 2 -->
-                    <Border Height="1" Margin="0,0,0,20">
+                    <Border Height="1" Margin="0,0,0,14">
                         <Border.Background>
                             <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
                                 <GradientStop Color="Transparent" Offset="0"/>
@@ -213,15 +219,15 @@
                     </Border>
 
                     <TextBlock Text="© 2026 CleanupTemp Pro. Все права защищены."
-                               FontFamily="Segoe UI" FontSize="11"
+                               FontFamily="Segoe UI" FontSize="10"
                                Foreground="#484870"
-                               HorizontalAlignment="Center" Margin="0,0,0,6"/>
+                               HorizontalAlignment="Center" Margin="0,0,0,4"/>
                     <TextBlock Text="Запускайте от имени администратора для полной очистки"
-                               FontFamily="Segoe UI" FontSize="11"
+                               FontFamily="Segoe UI" FontSize="10"
                                Foreground="#484870"
-                               HorizontalAlignment="Center" Margin="0,0,0,6"/>
+                               HorizontalAlignment="Center" Margin="0,0,0,4"/>
                     <TextBlock Text="Виталий Николаевич (vitalikkontr)"
-                               FontFamily="Segoe UI" FontSize="12"
+                               FontFamily="Segoe UI" FontSize="11"
                                Foreground="#484870"
                                HorizontalAlignment="Center"/>
                 </StackPanel>

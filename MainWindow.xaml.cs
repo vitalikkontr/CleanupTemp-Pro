@@ -31,7 +31,6 @@ using Application          = System.Windows.Application;
 using Point                = System.Windows.Point;
 using Orientation          = System.Windows.Controls.Orientation;
 using FontStyle            = System.Windows.FontStyle;
-using ColorConverter       = System.Windows.Media.ColorConverter;
 using Brushes              = System.Windows.Media.Brushes;
 using Brush                = System.Windows.Media.Brush;
 using HorizontalAlignment  = System.Windows.HorizontalAlignment;
@@ -88,12 +87,23 @@ namespace CleanupTemp_Pro
         public string   PctText   => $"{Pct * 100:F1}%";
         public string   SizeText  => SizeHelper.Format(SizeBytes);
         public string   HexColor  { get; set; } = "#888888";
-        /// <summary>Кисть для биндинга в XAML DataTemplate.</summary>
-        public SolidColorBrush ColorBrush =>
-            new(Color.FromRgb(
-                Convert.ToByte(HexColor.Substring(1, 2), 16),
-                Convert.ToByte(HexColor.Substring(3, 2), 16),
-                Convert.ToByte(HexColor.Substring(5, 2), 16)));
+
+        private SolidColorBrush? _brush;
+        public SolidColorBrush ColorBrush
+        {
+            get
+            {
+                if (_brush != null) return _brush;
+                _brush = new SolidColorBrush(Color.FromRgb(
+                    Convert.ToByte(HexColor.Substring(1, 2), 16),
+                    Convert.ToByte(HexColor.Substring(3, 2), 16),
+                    Convert.ToByte(HexColor.Substring(5, 2), 16)));
+                // Freeze позволяет использовать кисть из любого потока и снижает
+                // давление на GC — WPF вызывает геттер при каждой перерисовке.
+                _brush.Freeze();
+                return _brush;
+            }
+        }
     }
 
     public static class SizeHelper
@@ -105,6 +115,36 @@ namespace CleanupTemp_Pro
             if (b < 1024L * 1024 * 1024) return $"{b / (1024.0 * 1024):F1} МБ";
             return $"{b / (1024.0 * 1024 * 1024):F2} ГБ";
         }
+    }
+
+    /// <summary>
+    /// Центральное хранилище цветов приложения.
+    /// Все inline Color.FromRgb / hex-строки в коде берутся отсюда —
+    /// дизайнер меняет палитру в одном месте, а не по всему файлу.
+    /// </summary>
+    internal static class AppColors
+    {
+        // ── Акцентные ──────────────────────────────────────────────
+        public static readonly Color Accent  = Color.FromRgb(0x4A, 0x9E, 0xFF);  // синий
+        public static readonly Color Purple  = Color.FromRgb(0xA8, 0x55, 0xF7);  // фиолетовый
+        public static readonly Color Teal    = Color.FromRgb(0x06, 0xD6, 0xC7);  // зелёно-голубой
+        public static readonly Color Danger  = Color.FromRgb(0xFF, 0x4A, 0x6A);  // красный
+        public static readonly Color Warning = Color.FromRgb(0xFF, 0x8C, 0x00);  // оранжевый
+
+        // ── Поверхности ────────────────────────────────────────────
+        public static readonly Color TabActive      = Color.FromRgb(0x1A, 0x2A, 0x4A);
+        public static readonly Color TabActiveText  = Color.FromRgb(0x4A, 0x9E, 0xFF);
+        public static readonly Color Surface        = Color.FromRgb(0x1A, 0x1A, 0x3A);
+        public static readonly Color TextPrimary    = Color.FromRgb(0xE8, 0xE8, 0xFF);
+        public static readonly Color TextSecondary  = Color.FromRgb(0x88, 0x88, 0xBB);
+
+        // ── Диск: прогресс-бар ────────────────────────────────────
+        public static readonly Color DiskCritical1 = Color.FromRgb(0xFF, 0x3D, 0x00);
+        public static readonly Color DiskCritical2 = Color.FromRgb(0xCC, 0x00, 0x44);
+        public static readonly Color DiskWarning1  = Color.FromRgb(0xFF, 0x8C, 0x00);
+        public static readonly Color DiskWarning2  = Color.FromRgb(0xFF, 0xA5, 0x00);
+        public static readonly Color DiskNormal1   = Color.FromRgb(0x4A, 0x9E, 0xFF);
+        public static readonly Color DiskNormal2   = Color.FromRgb(0xA8, 0x55, 0xF7);
     }
 
     // ══════════════════════════════════════════════════════════════════
@@ -182,8 +222,13 @@ namespace CleanupTemp_Pro
         {
             try
             {
+                // Вызывается строго внутри lock(_lock) из Write().
+                // Временный файл с уникальным именем + File.Replace — атомарная замена:
+                // другой процесс никогда не увидит частично записанный лог.
+                string tmp = LogPath + ".tmp";
                 var lines = File.ReadAllLines(LogPath);
-                File.WriteAllLines(LogPath, lines.Skip(lines.Length / 2));
+                File.WriteAllLines(tmp, lines.Skip(lines.Length / 2));
+                File.Replace(tmp, LogPath, null);
             }
             catch { }
         }
@@ -217,6 +262,12 @@ namespace CleanupTemp_Pro
         // ── Белый список исключений ───────────────────────────────────
         // HashSet для O(1) проверки при сканировании тысяч файлов
         private HashSet<string> _excludePaths = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>
+        /// Подмножество <see cref="_excludePaths"/> — только папки (Directory.Exists == true).
+        /// Выделено отдельно чтобы IsExcluded не итерировал весь HashSet при проверке
+        /// «файл лежит внутри исключённой папки» — достаточно пройти только по папкам.
+        /// </summary>
+        private List<string> _excludedFolders = new();
         private readonly ObservableCollection<ExclusionItem> _exclusionItems = new();
         private static readonly string ExclusionsPath = System.IO.Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -225,6 +276,13 @@ namespace CleanupTemp_Pro
         // ── Большие файлы ─────────────────────────────────────────────
         private readonly BulkObservableCollection<LargeFileItem> _largeFileItems = new();
         private CancellationTokenSource? _largeScanCts;
+        /// <summary>
+        /// Task активного сканирования больших файлов.
+        /// Сохраняем чтобы LargeFile_Delete мог дождаться полного завершения
+        /// перед удалением — иначе сканер может держать FileInfo на удаляемый файл
+        /// и File.Delete упадёт с IOException.
+        /// </summary>
+        private Task _largeScanTask = Task.CompletedTask;
 
         // Флаги выполнения — читаются и пишутся только на UI потоке (async void гарантирует это)
         // Два отдельных флага чтобы сканирование и очистка не мешали друг другу
@@ -236,7 +294,6 @@ namespace CleanupTemp_Pro
         private bool _canStop;
         private int  _statTemp, _statBrowser, _statRecycle;
         private DispatcherTimer? _pulseTimer;
-        private bool _showingHistory;
         private volatile bool _wasInterruptedBySleep;
 
         // ── Защита папок ──────────────────────────────────────────────
@@ -392,16 +449,18 @@ namespace CleanupTemp_Pro
 
         /// <summary>
         /// Проверяет, попадает ли файл под белый список пользователя.
-        /// Сравниваем как точное совпадение (файл), так и «начинается с» (папка).
+        /// Точное совпадение — O(1) по HashSet.
+        /// Проверка «файл внутри папки» — O(n) только по папкам (_excludedFolders),
+        /// которых на практике на порядок меньше чем всех исключений.
         /// </summary>
         private bool IsExcluded(string filePath)
         {
             // Точное совпадение — файл явно добавлен в исключения
             if (_excludePaths.Contains(filePath)) return true;
             // Папка в исключениях — пропускаем всё, что в ней лежит
-            foreach (var ex in _excludePaths)
+            foreach (var folder in _excludedFolders)
             {
-                if (filePath.StartsWith(ex + System.IO.Path.DirectorySeparatorChar,
+                if (filePath.StartsWith(folder + System.IO.Path.DirectorySeparatorChar,
                                         StringComparison.OrdinalIgnoreCase))
                     return true;
             }
@@ -490,6 +549,13 @@ namespace CleanupTemp_Pro
             ExternalDrives: ChkExternalDrives?.IsChecked == true);
 
         private bool _settingsLoaded = false;
+        /// <summary>
+        /// Поднимается на время массового изменения чекбоксов (SelectAll/SelectNone).
+        /// Подавляет вызов SaveSettings на каждый из 10 чекбоксов — одно сохранение в конце.
+        /// Отдельный флаг вместо временного сброса _settingsLoaded делает намерение явным
+        /// и безопасен при будущем переходе на async-обработчики.
+        /// </summary>
+        private bool _bulkChanging = false;
 
         private void LoadSettings()
         {
@@ -517,7 +583,7 @@ namespace CleanupTemp_Pro
 
         private void Chk_Changed(object sender, RoutedEventArgs e)
         {
-            if (_settingsLoaded) SaveSettings();
+            if (_settingsLoaded && !_bulkChanging) SaveSettings();
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -564,8 +630,13 @@ namespace CleanupTemp_Pro
                 {
                     if (lParam != IntPtr.Zero)
                     {
-                        var vol = Marshal.PtrToStructure<DEV_BROADCAST_VOLUME>(lParam);
-                        if (vol.dbcv_devicetype == DBT_DEVTYP_VOLUME)
+                        // Сначала читаем только заголовок (dbcv_size + dbcv_devicetype) —
+                        // без проверки размера Marshal.PtrToStructure вызывает
+                        // AccessViolationException при подключении мышей, джойстиков, COM-портов.
+                        int headerSize = Marshal.ReadInt32(lParam);       // dbcv_size
+                        int devType    = Marshal.ReadInt32(lParam, 4);    // dbcv_devicetype
+                        int minSize    = Marshal.SizeOf<DEV_BROADCAST_VOLUME>();
+                        if (devType == DBT_DEVTYP_VOLUME && headerSize >= minSize)
                             Dispatcher.InvokeAsync(LoadDiskInfo);
                     }
                 }
@@ -606,6 +677,8 @@ namespace CleanupTemp_Pro
             LargeFilesListView.ItemsSource = _largeFileItems;
             ExclusionsListView.ItemsSource = _exclusionItems;
             LoadLogo();
+            // Постоянный шиммер запускается после полной загрузки XAML-дерева
+            Loaded += (_, _) => StartTitleShimmer();
             LoadDiskInfo();
             LoadSettings();
             LoadHistory();
@@ -629,6 +702,8 @@ namespace CleanupTemp_Pro
             InitThreadCountAsync();
             // Перехват сворачивания: Hide() вместо Minimize — окно уходит в трей
             StateChanged += MainWindow_StateChanged;
+            // Прокрутка колёсиком: регистрируем фикс после загрузки XAML-дерева
+            Loaded += (_, _) => RegisterAllScrollFixes();
             AppLog.Info("CleanupTemp Pro started");
         }
 
@@ -683,15 +758,14 @@ namespace CleanupTemp_Pro
         //  UI — ВКЛАДКИ / ПУЛЬС / ДИСКИ / СТАТУС
         // ══════════════════════════════════════════════════════════════
 
-        private readonly FontFamily _fontSemibold = new("Segoe UI Semibold");
-        private readonly FontFamily _fontRegular  = new("Segoe UI");
+        // FontFamily иммутабелен — один экземпляр на всё приложение достаточен
+        private static readonly FontFamily _fontSemibold = new("Segoe UI Semibold");
+        private static readonly FontFamily _fontRegular  = new("Segoe UI");
 
         private enum ActiveTab { Files, History, Large, Exclusions }
 
         private void SwitchTab(ActiveTab tab)
         {
-            _showingHistory = (tab == ActiveTab.History);
-
             FilesPanel.Visibility      = tab == ActiveTab.Files      ? Visibility.Visible : Visibility.Collapsed;
             HistoryPanel.Visibility    = tab == ActiveTab.History    ? Visibility.Visible : Visibility.Collapsed;
             LargeFilesPanel.Visibility = tab == ActiveTab.Large      ? Visibility.Visible : Visibility.Collapsed;
@@ -710,8 +784,8 @@ namespace CleanupTemp_Pro
 
             void Activate(Border hdr, TextBlock txt)
             {
-                hdr.Background = new SolidColorBrush(Color.FromRgb(0x1A, 0x2A, 0x4A));
-                txt.Foreground = new SolidColorBrush(Color.FromRgb(0x4A, 0x9E, 0xFF));
+                hdr.Background = new SolidColorBrush(AppColors.TabActive);
+                txt.Foreground = new SolidColorBrush(AppColors.TabActiveText);
                 txt.FontFamily = _fontSemibold;
             }
 
@@ -738,9 +812,7 @@ namespace CleanupTemp_Pro
             }
         }
 
-        // Совместимость со старым вызовом SwitchTab(false) при старте сканирования
-        private void SwitchTab(bool showHistory)
-            => SwitchTab(showHistory ? ActiveTab.History : ActiveTab.Files);
+
 
         private void StartPulse()
         {
@@ -781,14 +853,14 @@ namespace CleanupTemp_Pro
                             : "💿";
 
                         Color barC1, barC2;
-                        if      (pct >= 0.9)  { barC1 = Color.FromRgb(0xFF,0x3D,0x00); barC2 = Color.FromRgb(0xCC,0x00,0x44); }
-                        else if (pct >= 0.75) { barC1 = Color.FromRgb(0xFF,0x8C,0x00); barC2 = Color.FromRgb(0xFF,0xA5,0x00); }
-                        else                  { barC1 = Color.FromRgb(0x4A,0x9E,0xFF); barC2 = Color.FromRgb(0xA8,0x55,0xF7); }
+                        if      (pct >= 0.9)  { barC1 = AppColors.DiskCritical1; barC2 = AppColors.DiskCritical2; }
+                        else if (pct >= 0.75) { barC1 = AppColors.DiskWarning1;  barC2 = AppColors.DiskWarning2;  }
+                        else                  { barC1 = AppColors.DiskNormal1;   barC2 = AppColors.DiskNormal2;   }
 
                         var barContainer = new Border
                         {
                             Height = 6, CornerRadius = new CornerRadius(3),
-                            Background = new SolidColorBrush(Color.FromRgb(0x1A,0x1A,0x3A))
+                            Background = new SolidColorBrush(AppColors.Surface)
                         };
                         var bar = new Border
                         {
@@ -815,15 +887,15 @@ namespace CleanupTemp_Pro
                         {
                             Text = $"{letter}  {label}", FontFamily = _fontSemibold,
                             FontSize = 11,
-                            Foreground = new SolidColorBrush(Color.FromRgb(0xE8,0xE8,0xFF)),
+                            Foreground = new SolidColorBrush(AppColors.TextPrimary),
                             VerticalAlignment = VerticalAlignment.Center
                         });
                         Grid.SetColumn(namePanel, 0);
                         header.Children.Add(namePanel);
 
-                        var pctColor = pct >= 0.9  ? Color.FromRgb(0xFF,0x4A,0x6A)
-                                     : pct >= 0.75 ? Color.FromRgb(0xFF,0x8C,0x00)
-                                     :               Color.FromRgb(0x4A,0x9E,0xFF);
+                        var pctColor = pct >= 0.9  ? AppColors.Danger
+                                     : pct >= 0.75 ? AppColors.Warning
+                                     :               AppColors.Accent;
                         var pctBlock = new TextBlock
                         {
                             Text = $"{pct*100:F0}%", FontFamily = _fontSemibold,
@@ -838,7 +910,7 @@ namespace CleanupTemp_Pro
                         {
                             Text = $"{SizeHelper.Format(used)} / {SizeHelper.Format(drv.TotalSize)}",
                             FontFamily = _fontRegular, FontSize = 10,
-                            Foreground = new SolidColorBrush(Color.FromRgb(0x88,0x88,0xBB)),
+                            Foreground = new SolidColorBrush(AppColors.TextSecondary),
                             Margin = new Thickness(0,0,0,4)
                         });
                         card.Children.Add(barContainer);
@@ -866,18 +938,17 @@ namespace CleanupTemp_Pro
         private void SetStatus(string text, StatusKind kind)
         {
             StatusText.Text = text;
-            string hex = kind switch
+            Color dotColor = kind switch
             {
-                StatusKind.Scanning => "#4A9EFF",
-                StatusKind.Cleaning => "#FF8C00",
-                StatusKind.Found    => "#FF4A6A",
-                StatusKind.Done     => "#06D6C7",
-                StatusKind.Stopped  => "#8888BB",
-                StatusKind.Error    => "#FF4A6A",
-                _                   => "#06D6C7"
+                StatusKind.Scanning => AppColors.Accent,
+                StatusKind.Cleaning => AppColors.Warning,
+                StatusKind.Found    => AppColors.Danger,
+                StatusKind.Done     => AppColors.Teal,
+                StatusKind.Stopped  => AppColors.TextSecondary,
+                StatusKind.Error    => AppColors.Danger,
+                _                   => AppColors.Teal,
             };
-            if (ColorConverter.ConvertFromString(hex) is Color c)
-                StatusDotColor.Color = c;
+            StatusDotColor.Color = dotColor;
 
             // Синхронизируем трей — маппинг StatusKind → TrayStatus
             TrayStatus tray = kind switch
@@ -920,11 +991,39 @@ namespace CleanupTemp_Pro
         //  КНОПКИ — HOVER ЭФФЕКТЫ
         // ══════════════════════════════════════════════════════════════
 
+        // Кэшированные frozen-эффекты — создаются один раз при загрузке типа,
+        // не выделяются заново на каждый MouseEnter.
+        private static readonly System.Windows.Media.Effects.DropShadowEffect _glowScan =
+            MakeGlow(Color.FromRgb(0x4A, 0x9E, 0xFF));
+        private static readonly System.Windows.Media.Effects.DropShadowEffect _glowClean =
+            MakeGlow(Color.FromRgb(0xFF, 0x50, 0x70), r: 24, o: 0.75);
+        private static readonly System.Windows.Media.Effects.DropShadowEffect _glowStop =
+            MakeGlow(Color.FromRgb(0x06, 0xD6, 0xC7), r: 35, o: 1.0);
+        private static readonly System.Windows.Media.Effects.DropShadowEffect _glowLargeScan =
+            MakeGlow(Color.FromRgb(0xA8, 0x55, 0xF7), r: 18, o: 0.8);
+        private static readonly System.Windows.Media.Effects.DropShadowEffect _glowExclusion =
+            MakeGlow(Color.FromRgb(0x4A, 0x9E, 0xFF), r: 14, o: 0.6);
+
+        private static System.Windows.Media.Effects.DropShadowEffect MakeGlow(Color c, double r = 28, double o = 0.85)
+        {
+            var fx = new System.Windows.Media.Effects.DropShadowEffect
+                { Color = c, BlurRadius = r, ShadowDepth = 0, Opacity = o };
+            // Freeze: WPF может переиспользовать объект между потоками,
+            // нет давления на GC при частых hover-событиях.
+            fx.Freeze();
+            return fx;
+        }
+
+        /// <summary>Создаёт новый frozen Glow для редких случаев с нестандартными параметрами.</summary>
         private static System.Windows.Media.Effects.DropShadowEffect Glow(Color c, double r = 28, double o = 0.85)
-            => new() { Color = c, BlurRadius = r, ShadowDepth = 0, Opacity = o };
+            => MakeGlow(c, r, o);
 
         private static LinearGradientBrush HGrad(Color c1, Color c2)
-            => new(c1, c2, new Point(0, 0.5), new Point(1, 0.5));
+        {
+            var b = new LinearGradientBrush(c1, c2, new Point(0, 0.5), new Point(1, 0.5));
+            b.Freeze();
+            return b;
+        }
 
         // SCAN
         private void ScanBorder_Click(object sender, MouseButtonEventArgs e)
@@ -935,7 +1034,7 @@ namespace CleanupTemp_Pro
         private void ScanBorder_Enter(object sender, MouseEventArgs e)
         {
             if (ScanBtnBorder.IsEnabled)
-                ScanBtnBorder.Effect = Glow(Color.FromRgb(0x4A, 0x9E, 0xFF));
+                ScanBtnBorder.Effect = _glowScan;
         }
         private void ScanBorder_Leave(object sender, MouseEventArgs e)
         {
@@ -952,7 +1051,7 @@ namespace CleanupTemp_Pro
         private void CleanBorder_Enter(object sender, MouseEventArgs e)
         {
             if (CleanBtnBorder.IsEnabled)
-                CleanBtnBorder.Effect = Glow(Color.FromRgb(0xFF, 0x50, 0x70), r: 24, o: 0.75);
+                CleanBtnBorder.Effect = _glowClean;
         }
         private void CleanBorder_Leave(object sender, MouseEventArgs e)
         {
@@ -973,7 +1072,7 @@ namespace CleanupTemp_Pro
             if (!StopBtnBorder.IsEnabled) return;
             StopBtnBorder.Background  = HGrad(Color.FromRgb(0x0A,0x30,0x4A), Color.FromRgb(0x0A,0x28,0x3A));
             StopBtnBorder.BorderBrush = HGrad(Color.FromRgb(0x4A,0x9E,0xFF), Color.FromRgb(0x06,0xD6,0xC7));
-            StopBtnBorder.Effect      = Glow(Color.FromRgb(0x06,0xD6,0xC7), r: 35, o: 1.0);
+            StopBtnBorder.Effect      = _glowStop;
         }
         private void StopBorder_Leave(object sender, MouseEventArgs e)
         {
@@ -1035,12 +1134,24 @@ namespace CleanupTemp_Pro
                                and not ServiceControllerStatus.StopPending)
                 {
                     svc.Stop();
-                    svc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(25));
+                    // Опрашиваем статус с интервалом 100мс до таймаута 25 сек.
+                    // Thread.Sleep здесь допустим: StopWindowsUpdateService вызывается
+                    // строго внутри Task.Run (фоновый поток пула, не UI).
+                    // Переход на async потребовал бы сигнатуру async Task<bool>
+                    // и цепочку изменений вверх по стеку — изменение отложено до рефакторинга.
+                    var deadline = DateTime.UtcNow.AddSeconds(25);
+                    while (DateTime.UtcNow < deadline)
+                    {
+                        svc.Refresh();
+                        if (svc.Status == ServiceControllerStatus.Stopped) break;
+                        Thread.Sleep(100);
+                    }
                 }
 
-                // Короткий spin-wait — даём ОС отпустить хэндлы файлов
-                var deadline = DateTime.UtcNow.AddMilliseconds(800);
-                while (DateTime.UtcNow < deadline) Thread.Sleep(50);
+                // Даём ОС 800мс отпустить хэндлы файлов после остановки службы.
+                // SpinWait.SpinUntil с таймаутом: не блокирует поток жёстко,
+                // ОС может переключить его на другую работу в промежутках.
+                SpinWait.SpinUntil(() => false, millisecondsTimeout: 800);
 
                 AppLog.Info("Windows Update service stopped");
                 return true;
@@ -1286,7 +1397,11 @@ namespace CleanupTemp_Pro
             ListCountLabel.Text = "";
             SetStatus("Сканирование...", StatusKind.Scanning);
             SetProgress(0, "Подготовка...");
-            if (_showingHistory) SwitchTab(false);
+            // Если открыта не вкладка «Файлы» — переключаем на неё чтобы пользователь видел прогресс
+            if (HistoryPanel.Visibility == Visibility.Visible ||
+                LargeFilesPanel.Visibility == Visibility.Visible ||
+                ExclusionsPanel.Visibility == Visibility.Visible)
+                SwitchTab(ActiveTab.Files);
 
             var oldCts = _cts;
             _cts = new CancellationTokenSource();
@@ -1565,17 +1680,22 @@ namespace CleanupTemp_Pro
                 if (SHQueryRecycleBin(null, ref info) == 0 && info.i64NumItems > 0)
                 {
                     long sz = info.i64Size, cnt = info.i64NumItems;
+                    var recycleItem = new FileItem
+                    {
+                        Icon      = "🗑️",
+                        Path      = $"Корзина ({cnt} объектов)",
+                        Category  = "Корзина",
+                        SizeBytes = sz
+                    };
                     Dispatcher.Invoke(() =>
                     {
                         _totalFoundBytes += sz;
                         _statRecycle     += (int)cnt;
-                        _fileItems.Add(new FileItem
-                        {
-                            Icon      = "🗑️",
-                            Path      = $"Корзина ({cnt} объектов)",
-                            Category  = "Корзина",
-                            SizeBytes = sz
-                        });
+                        // Добавляем в оба списка — _allFoundItems используется CleanBtn_Execute
+                        // для проверки _allFoundItems.Count == 0 (строка кнопки «Очистить»).
+                        // Без этого кнопка блокировалась когда находилась только корзина.
+                        _allFoundItems.Add(recycleItem);
+                        _fileItems.Add(recycleItem);
                         TotalSizeText.Text  = SizeHelper.Format(_totalFoundBytes);
                         FileCountText.Text  = $"{_allFoundItems.Count} файлов";
                         ListCountLabel.Text = $"{_allFoundItems.Count} объектов";
@@ -1741,10 +1861,9 @@ namespace CleanupTemp_Pro
             SetProgress(0, "Начинаю очистку...");
 
             // Берём полный список — _fileItems ограничен 5000 для отображения,
-            // _allFoundItems содержит все найденные файлы
-            var snapshot        = _allFoundItems.ToList();
-            // Снапшот для графика: сохраняем ДО того как _allFoundItems будет очищен в finally
-            var cleanedSnapshot = snapshot.ToList();
+            // _allFoundItems содержит все найденные файлы.
+            // snapshot неизменяем после ToList() — используем его же как снапшот для графика.
+            var snapshot   = _allFoundItems.ToList();
             bool doRecycle = snapshot.Any(x => x.Category == "Корзина")
                           || _fileItems.Any(x => x.Category == "Корзина");
             var regular    = snapshot.Where(x => x.Category != "Корзина").ToList();
@@ -2001,7 +2120,7 @@ namespace CleanupTemp_Pro
 
                     // Показываем пирог после закрытия диалога — пользователь уже
                     // знает что всё хорошо, теперь видит разбивку по категориям
-                    ShowCleanupChart(freed, cleanedSnapshot);
+                    ShowCleanupChart(freed, snapshot);
                 }
             }
         }
@@ -2060,14 +2179,15 @@ namespace CleanupTemp_Pro
                 if (!File.Exists(ExclusionsPath)) return;
                 var list = JsonSerializer.Deserialize<List<string>>(File.ReadAllText(ExclusionsPath));
                 if (list == null) return;
-                _excludePaths = new HashSet<string>(list, StringComparer.OrdinalIgnoreCase);
+                _excludePaths    = new HashSet<string>(list, StringComparer.OrdinalIgnoreCase);
+                _excludedFolders = list.Where(Directory.Exists).ToList();
                 foreach (var path in list)
                     _exclusionItems.Add(new ExclusionItem
                     {
                         Path = path,
                         Icon = Directory.Exists(path) ? "📁" : "📄"
                     });
-                AppLog.Info($"Exclusions loaded: {list.Count} entries");
+                AppLog.Info($"Exclusions loaded: {list.Count} entries ({_excludedFolders.Count} folders)");
             }
             catch (Exception ex) { AppLog.Error("LoadExclusions failed", ex); }
         }
@@ -2089,6 +2209,9 @@ namespace CleanupTemp_Pro
             if (string.IsNullOrWhiteSpace(path)) return;
             if (_excludePaths.Add(path)) // HashSet.Add возвращает false если уже есть
             {
+                // Если это папка — добавляем и в быстрый список для IsExcluded
+                if (Directory.Exists(path) && !_excludedFolders.Contains(path, StringComparer.OrdinalIgnoreCase))
+                    _excludedFolders.Add(path);
                 _exclusionItems.Add(new ExclusionItem { Path = path, Icon = icon });
                 SaveExclusions();
                 AppLog.Info($"Exclusion added: {path}");
@@ -2143,6 +2266,7 @@ namespace CleanupTemp_Pro
             string? path = fe.Tag as string;
             if (path == null) return;
             _excludePaths.Remove(path);
+            _excludedFolders.RemoveAll(f => string.Equals(f, path, StringComparison.OrdinalIgnoreCase));
             var item = _exclusionItems.FirstOrDefault(x => x.Path == path);
             if (item != null) _exclusionItems.Remove(item);
             SaveExclusions();
@@ -2158,6 +2282,7 @@ namespace CleanupTemp_Pro
             dlg.ShowDialog();
             if (!dlg.Result) return;
             _excludePaths.Clear();
+            _excludedFolders.Clear();
             _exclusionItems.Clear();
             SaveExclusions();
             AppLog.Info("All exclusions cleared");
@@ -2167,7 +2292,7 @@ namespace CleanupTemp_Pro
         private void ExclusionBtn_Enter(object sender, MouseEventArgs e)
         {
             if (sender is Border b)
-                b.Effect = Glow(Color.FromRgb(0x4A, 0x9E, 0xFF), r: 14, o: 0.6);
+                b.Effect = _glowExclusion;
         }
         private void ExclusionBtn_Leave(object sender, MouseEventArgs e)
         {
@@ -2178,11 +2303,8 @@ namespace CleanupTemp_Pro
         //  БОЛЬШИЕ ФАЙЛЫ
         // ══════════════════════════════════════════════════════════════
 
-        private static readonly string[] _largeFileDriveLetters =
-            DriveInfo.GetDrives()
-                .Where(d => d.IsReady && d.DriveType is DriveType.Fixed or DriveType.Removable)
-                .Select(d => d.RootDirectory.FullName)
-                .ToArray();
+        // Диски перечисляются при каждом запуске LargeScan_Click — статическое поле было удалено
+        // (оно инициализировалось при загрузке типа, до открытия окна, и нигде не использовалось).
 
         private static string GetLargeFileIcon(string ext) => ext.ToLowerInvariant() switch
         {
@@ -2226,7 +2348,7 @@ namespace CleanupTemp_Pro
 
             try
             {
-                await Task.Run(() =>
+                _largeScanTask = Task.Run(() =>
                 {
                     // Сканируем все готовые фиксированные и съёмные диски
                     var drives = DriveInfo.GetDrives()
@@ -2295,6 +2417,7 @@ namespace CleanupTemp_Pro
                         Flush();
                     }
                 }, CancellationToken.None);
+                await _largeScanTask;
             }
             catch (OperationCanceledException) { }
             catch (Exception ex) { AppLog.Error("LargeScan failed", ex); }
@@ -2327,7 +2450,7 @@ namespace CleanupTemp_Pro
         }
 
         // Контекстное меню: «Удалить файл» (с подтверждением)
-        private void LargeFile_Delete(object sender, RoutedEventArgs e)
+        private async void LargeFile_Delete(object sender, RoutedEventArgs e)
         {
             if (LargeFilesListView.SelectedItem is not LargeFileItem item) return;
             var dlg = new CustomDialog(
@@ -2344,6 +2467,12 @@ namespace CleanupTemp_Pro
             if (!dlg.Result) return;
             try
             {
+                // Отменяем активное сканирование и ждём его полного завершения —
+                // Cancel() асинхронное, без await сканер может ещё держать FileInfo
+                // на удаляемый файл и File.Delete упадёт с IOException.
+                _largeScanCts?.Cancel();
+                await _largeScanTask.ConfigureAwait(true);  // true = вернуться на UI поток
+
                 File.Delete(item.Path);
                 _largeFileItems.Remove(item);
                 AppLog.Info($"LargeFile deleted: {item.Path}");
@@ -2360,7 +2489,7 @@ namespace CleanupTemp_Pro
         private void LargeScanBtn_Enter(object sender, MouseEventArgs e)
         {
             if (LargeScanBtnBorder.IsEnabled)
-                LargeScanBtnBorder.Effect = Glow(Color.FromRgb(0xA8, 0x55, 0xF7), r: 18, o: 0.8);
+                LargeScanBtnBorder.Effect = _glowLargeScan;
         }
         private void LargeScanBtn_Leave(object sender, MouseEventArgs e)
             => LargeScanBtnBorder.Effect = null;
@@ -2393,9 +2522,11 @@ namespace CleanupTemp_Pro
         /// <summary>
         /// Единая точка обновления трея из MainWindow.
         /// Все вызовы идут через этот метод — не разбросаны по коду.
+        /// Используем безопасный каст вместо жёсткого App.Instance — защита от ошибок
+        /// при запуске вне штатного контекста (тесты, инструменты дизайнера).
         /// </summary>
         private void NotifyTray(TrayStatus status, string? detail = null)
-            => App.Instance.UpdateTrayStatus(status, detail);
+            => (Application.Current as App)?.UpdateTrayStatus(status, detail);
 
         // ══════════════════════════════════════════════════════════════
         //  PIE CHART — отчёт по очистке
@@ -2417,7 +2548,7 @@ namespace CleanupTemp_Pro
             { "Firefox кэш",             "#FF6B35" },
             { "Brave кэш",               "#FB923C" },
             { "Opera кэш",               "#EF4444" },
-            { "Yandex кэш",              "#DC2626" },
+            { "Яндекс кэш",              "#DC2626" },   // NormalizeCategory → «Яндекс кэш» (кириллица)
             { "Vivaldi кэш",             "#C084FC" },
             // Thumbnails / Office
             { "Thumbnails кэш",          "#06D6C7" },
@@ -2442,7 +2573,7 @@ namespace CleanupTemp_Pro
             // Частичное совпадение (браузерные подкатегории, внешние диски и т.д.)
             foreach (var kv in _categoryColors)
                 if (category.Contains(kv.Key, StringComparison.OrdinalIgnoreCase)) return kv.Value;
-            return _fallbackColors[fallbackIndex % _fallbackColors.Length];
+            return _fallbackColors[Math.Abs(fallbackIndex) % _fallbackColors.Length];
         }
 
         /// <summary>
@@ -2487,20 +2618,30 @@ namespace CleanupTemp_Pro
             ChartOverlay.Visibility = Visibility.Visible;
         }
 
+        /// <summary>Таблица нормализации: префикс категории → итоговое имя для диаграммы.</summary>
+        private static readonly (string Prefix, string Result)[] _categoryPrefixes =
+        {
+            ("Chrome",        "Chrome кэш"),
+            ("Edge",          "Edge кэш"),
+            ("Firefox",       "Firefox кэш"),
+            ("Brave",         "Brave кэш"),
+            ("Opera",         "Opera кэш"),
+            // «Яндекс» (кириллица) — из GetScanPaths; «Yandex» — для внешних дисков
+            ("Яндекс",        "Яндекс кэш"),
+            ("Yandex",        "Яндекс кэш"),
+            ("Vivaldi",       "Vivaldi кэш"),
+            ("WU кэш",        "Windows Update кэш"),
+            ("Корзина",       "Корзина"),
+            ("Windows Temp",  "Windows Temp"),
+            ("Temp",          "User Temp"),
+        };
+
         /// <summary>Нормализует имя категории: браузеры → «Chrome кэш» и т.д.</summary>
         private static string NormalizeCategory(string cat)
         {
-            if (cat.StartsWith("Chrome",  StringComparison.OrdinalIgnoreCase)) return "Chrome кэш";
-            if (cat.StartsWith("Edge",    StringComparison.OrdinalIgnoreCase)) return "Edge кэш";
-            if (cat.StartsWith("Firefox", StringComparison.OrdinalIgnoreCase)) return "Firefox кэш";
-            if (cat.StartsWith("Brave",   StringComparison.OrdinalIgnoreCase)) return "Brave кэш";
-            if (cat.StartsWith("Opera",   StringComparison.OrdinalIgnoreCase)) return "Opera кэш";
-            if (cat.StartsWith("Yandex",  StringComparison.OrdinalIgnoreCase)) return "Yandex кэш";
-            if (cat.StartsWith("Vivaldi", StringComparison.OrdinalIgnoreCase)) return "Vivaldi кэш";
-            if (cat.StartsWith("WU кэш",  StringComparison.OrdinalIgnoreCase)) return "Windows Update кэш";
-            if (cat.StartsWith("Корзина", StringComparison.OrdinalIgnoreCase)) return "Корзина";
-            if (cat.StartsWith("Temp",    StringComparison.OrdinalIgnoreCase)) return "User Temp";
-            if (cat.StartsWith("Windows Temp", StringComparison.OrdinalIgnoreCase)) return "Windows Temp";
+            foreach (var (prefix, result) in _categoryPrefixes)
+                if (cat.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    return result;
             return cat;
         }
 
@@ -2624,14 +2765,18 @@ namespace CleanupTemp_Pro
 
         private void SelectAll_Click(object sender, RoutedEventArgs e)
         {
-            foreach (var cb in GetAllCheckBoxes()) cb.IsChecked = true;
-            SaveSettings();
+            _bulkChanging = true;
+            try   { foreach (var cb in GetAllCheckBoxes()) cb.IsChecked = true; }
+            finally { _bulkChanging = false; }
+            if (_settingsLoaded) SaveSettings();
         }
 
         private void SelectNone_Click(object sender, RoutedEventArgs e)
         {
-            foreach (var cb in GetAllCheckBoxes()) cb.IsChecked = false;
-            SaveSettings();
+            _bulkChanging = true;
+            try   { foreach (var cb in GetAllCheckBoxes()) cb.IsChecked = false; }
+            finally { _bulkChanging = false; }
+            if (_settingsLoaded) SaveSettings();
         }
 
         private void AboutBtn_Click(object sender, RoutedEventArgs e)
@@ -2663,29 +2808,71 @@ namespace CleanupTemp_Pro
             WindowState = WindowState == WindowState.Maximized
                 ? WindowState.Normal : WindowState.Maximized;
 
+        private static readonly System.Windows.Media.Effects.DropShadowEffect _tabHoverGlow =
+            MakeGlow(Color.FromRgb(0x4A, 0x9E, 0xFF), r: 8, o: 0.3);
+
         private void TabHeader_MouseEnter(object sender, MouseEventArgs e)
         {
             if (sender is not Border header) return;
-            bool isTransparent = header.Background == Brushes.Transparent ||
-                                 (header.Background as SolidColorBrush)?.Color.A == 0;
+            bool isTransparent = header.Background == null
+                              || header.Background == Brushes.Transparent
+                              || (header.Background is SolidColorBrush scb && scb.Color.A == 0);
             if (isTransparent)
                 header.Background = new SolidColorBrush(Color.FromArgb(50, 74, 158, 255));
-            header.Effect = new System.Windows.Media.Effects.DropShadowEffect
-            {
-                Color = Color.FromRgb(0x4A, 0x9E, 0xFF),
-                BlurRadius = 8, ShadowDepth = 0, Opacity = 0.3
-            };
+            header.Effect = _tabHoverGlow;
         }
 
         private void TabHeader_MouseLeave(object sender, MouseEventArgs e)
         {
             if (sender is not Border header) return;
-            bool isFilesActive   = FilesPanel.Visibility   == Visibility.Visible;
-            bool isHistoryActive = HistoryPanel.Visibility == Visibility.Visible;
-            if (header == TabFilesHeader   && !isFilesActive)   header.Background = Brushes.Transparent;
-            if (header == TabHistoryHeader && !isHistoryActive) header.Background = Brushes.Transparent;
+            // Сбрасываем фон только для неактивных вкладок
+            bool isActive =
+                (header == TabFilesHeader      && FilesPanel.Visibility      == Visibility.Visible) ||
+                (header == TabHistoryHeader    && HistoryPanel.Visibility    == Visibility.Visible) ||
+                (header == TabLargeHeader      && LargeFilesPanel.Visibility == Visibility.Visible) ||
+                (header == TabExclusionsHeader && ExclusionsPanel.Visibility == Visibility.Visible);
+            if (!isActive)
+                header.Background = Brushes.Transparent;
             header.Opacity = 0.9;
             header.Effect  = null;
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        //  SCROLL WHEEL FIX
+        //  ListView/ItemsControl с отключённым встроенным скроллером поглощает
+        //  MouseWheel. PreviewMouseWheel перехватывает событие раньше и
+        //  вручную прокручивает ближайший ScrollViewer-предок.
+        // ══════════════════════════════════════════════════════════════
+
+        private void RegisterAllScrollFixes()
+        {
+            FixScrollableControl(FileListView);
+            FixScrollableControl(LargeFilesListView);
+            // ExclusionsListView объявлен как ItemsControl в XAML
+            FixScrollableControl(ExclusionsListView);
+        }
+
+        private static void FixScrollableControl(UIElement element)
+        {
+            element.PreviewMouseWheel += (sender, e) =>
+            {
+                var sv = FindAncestor<ScrollViewer>((DependencyObject)sender);
+                if (sv == null) return;
+                double lines = SystemParameters.WheelScrollLines;
+                sv.ScrollToVerticalOffset(sv.VerticalOffset - e.Delta / 120.0 * lines * 20);
+                e.Handled = true;
+            };
+        }
+
+        private static T? FindAncestor<T>(DependencyObject child) where T : DependencyObject
+        {
+            var current = System.Windows.Media.VisualTreeHelper.GetParent(child);
+            while (current != null)
+            {
+                if (current is T target) return target;
+                current = System.Windows.Media.VisualTreeHelper.GetParent(current);
+            }
+            return null;
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -2713,15 +2900,18 @@ namespace CleanupTemp_Pro
         }
 
         // ══════════════════════════════════════════════════════════════
-        //  SHIMMER — переливание заголовка и иконки при наведении
+        //  SHIMMER — постоянное переливание заголовка и иконки
         // ══════════════════════════════════════════════════════════════
 
-        // Анимации храним как поля — чтобы остановить их при MouseLeave
-        private DoubleAnimation? _shimmerAnim;
-        private DoubleAnimation? _shimmerAnim2;
-        private DoubleAnimation? _iconGlowAnim;
+        private LinearGradientBrush? _shimmerBrush1;
+        private LinearGradientBrush? _shimmerBrush2;
+        private System.Windows.Media.Effects.DropShadowEffect? _iconGlow;
 
-        private void TitleLogo_MouseEnter(object sender, MouseEventArgs e)
+        /// <summary>
+        /// Запускает постоянный шиммер на названии и пульсирующий glow на иконке.
+        /// Вызывается один раз из Loaded — после этого анимация работает всё время.
+        /// </summary>
+        private void StartTitleShimmer()
         {
             // ── Shimmer на тексте «Temp» ──
             var brush1 = new LinearGradientBrush();
@@ -2730,14 +2920,15 @@ namespace CleanupTemp_Pro
             brush1.GradientStops.Add(new GradientStop(Color.FromRgb(0x4A, 0x9E, 0xFF), 0.0));
             brush1.GradientStops.Add(new GradientStop(Color.FromRgb(0xFF, 0xFF, 0xFF), 0.5));
             brush1.GradientStops.Add(new GradientStop(Color.FromRgb(0xA8, 0x55, 0xF7), 1.0));
+            _shimmerBrush1 = brush1;
             TitleRunTemp.Foreground = brush1;
 
-            _shimmerAnim = new DoubleAnimation(-0.5, 1.5, TimeSpan.FromMilliseconds(900))
+            var anim1 = new DoubleAnimation(-0.5, 1.5, TimeSpan.FromMilliseconds(1400))
             {
                 RepeatBehavior = RepeatBehavior.Forever,
                 EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
             };
-            brush1.GradientStops[1].BeginAnimation(GradientStop.OffsetProperty, _shimmerAnim);
+            brush1.GradientStops[1].BeginAnimation(GradientStop.OffsetProperty, anim1);
 
             // ── Shimmer на тексте «Pro» ──
             var brush2 = new LinearGradientBrush();
@@ -2746,50 +2937,39 @@ namespace CleanupTemp_Pro
             brush2.GradientStops.Add(new GradientStop(Color.FromRgb(0x06, 0xD6, 0xC7), 0.0));
             brush2.GradientStops.Add(new GradientStop(Color.FromRgb(0xFF, 0xFF, 0xFF), 0.5));
             brush2.GradientStops.Add(new GradientStop(Color.FromRgb(0x4A, 0x9E, 0xFF), 1.0));
+            _shimmerBrush2 = brush2;
             TitleRunPro.Foreground = brush2;
 
-            _shimmerAnim2 = new DoubleAnimation(-0.5, 1.5, TimeSpan.FromMilliseconds(900))
+            var anim2 = new DoubleAnimation(-0.5, 1.5, TimeSpan.FromMilliseconds(1400))
             {
                 RepeatBehavior = RepeatBehavior.Forever,
-                BeginTime      = TimeSpan.FromMilliseconds(150),
+                BeginTime      = TimeSpan.FromMilliseconds(300),
                 EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
             };
-            brush2.GradientStops[1].BeginAnimation(GradientStop.OffsetProperty, _shimmerAnim2);
+            brush2.GradientStops[1].BeginAnimation(GradientStop.OffsetProperty, anim2);
 
-            // ── Glow на иконке ──
-            _iconGlowAnim = new DoubleAnimation(8, 22, TimeSpan.FromMilliseconds(700))
+            // ── Пульсирующий glow на иконке ──
+            var glowAnim = new DoubleAnimation(6, 20, TimeSpan.FromMilliseconds(1200))
             {
                 AutoReverse    = true,
                 RepeatBehavior = RepeatBehavior.Forever,
                 EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
             };
-            var glow = new System.Windows.Media.Effects.DropShadowEffect
+            _iconGlow = new System.Windows.Media.Effects.DropShadowEffect
             {
                 Color       = Color.FromRgb(0x4A, 0x9E, 0xFF),
                 ShadowDepth = 0,
                 Opacity     = 0.85,
-                BlurRadius  = 8,
+                BlurRadius  = 6,
             };
-            TitleLogoImage.Effect = glow;
-            glow.BeginAnimation(System.Windows.Media.Effects.DropShadowEffect.BlurRadiusProperty, _iconGlowAnim);
+            TitleLogoImage.Effect = _iconGlow;
+            _iconGlow.BeginAnimation(
+                System.Windows.Media.Effects.DropShadowEffect.BlurRadiusProperty, glowAnim);
         }
 
-        private void TitleLogo_MouseLeave(object sender, MouseEventArgs e)
-        {
-            _shimmerAnim?.SetValue(Timeline.BeginTimeProperty, null);
-            _shimmerAnim2?.SetValue(Timeline.BeginTimeProperty, null);
-
-            var origTemp = new LinearGradientBrush();
-            origTemp.StartPoint = new Point(0, 0.5);
-            origTemp.EndPoint   = new Point(1, 0.5);
-            origTemp.GradientStops.Add(new GradientStop(Color.FromRgb(0x4A, 0x9E, 0xFF), 0.0));
-            origTemp.GradientStops.Add(new GradientStop(Color.FromRgb(0xA8, 0x55, 0xF7), 1.0));
-            origTemp.Freeze();
-            TitleRunTemp.Foreground = origTemp;
-
-            TitleRunPro.Foreground = new SolidColorBrush(Color.FromRgb(0x06, 0xD6, 0xC7));
-            TitleLogoImage.Effect  = null;
-        }
+        // Заглушки — XAML-привязки сохранены, анимация теперь постоянная
+        private void TitleLogo_MouseEnter(object sender, MouseEventArgs e) { }
+        private void TitleLogo_MouseLeave(object sender, MouseEventArgs e) { }
 
         private void TabFiles_Click(object sender, MouseButtonEventArgs e)
             => SwitchTab(ActiveTab.Files);
