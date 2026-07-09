@@ -1,4 +1,4 @@
-<div align="center"><img width="1160" height="820" alt="2026-02-24_083443" src="https://github.com/user-attachments/assets/0a41a5a7-b999-4c8d-a77a-d2b3a2678922" />
+<div align="center"><img width="775" height="611" alt="CleanupTemp" src="https://github.com/user-attachments/assets/0d6883dd-fcf2-4792-9d41-8d110c292537" />
 
 # Мощная и удобная утилита для безопасной очистки временных файлов и кэша. Идеальна для поддержания чистоты системы и экономии места на дисках. Чистит лучше чем другие! 🧹
  
